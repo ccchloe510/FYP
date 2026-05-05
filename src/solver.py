@@ -1,0 +1,159 @@
+"""Joint proximal-gradient solver with backtracking."""
+
+from copy import deepcopy
+from typing import Dict
+
+import numpy as np
+
+try:
+    from .model import gradients, objective
+    from .prox import prox_C, prox_D, prox_u
+except ImportError:  # pragma: no cover - enables direct script execution
+    from model import gradients, objective
+    from prox import prox_C, prox_D, prox_u
+
+
+def _copy_params(params: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    copied = {}
+    for key, value in params.items():
+        if isinstance(value, np.ndarray):
+            copied[key] = value.copy()
+        else:
+            copied[key] = deepcopy(value)
+    return copied
+
+
+def _flatten_diff_sq(old: Dict[str, np.ndarray], new: Dict[str, np.ndarray]) -> float:
+    total = 0.0
+    for key in ("C", "D", "w", "b", "u"):
+        diff = np.asarray(new[key]) - np.asarray(old[key])
+        total += float(np.sum(diff * diff))
+    return total
+
+
+def _flatten_inner_product(left: Dict[str, np.ndarray], right: Dict[str, np.ndarray]) -> float:
+    total = 0.0
+    for key in ("C", "D", "w", "b", "u"):
+        total += float(np.sum(np.asarray(left[key]) * np.asarray(right[key])))
+    return total
+
+
+def gradient_step(params: Dict[str, np.ndarray], grads: Dict[str, np.ndarray], step: float) -> Dict[str, np.ndarray]:
+    trial = _copy_params(params)
+    for key in ("C", "D", "w", "b", "u"):
+        trial[key] = np.asarray(params[key]) - step * np.asarray(grads[key])
+    return trial
+
+
+def prox_step(trial: Dict[str, np.ndarray], step: float, hyper) -> Dict[str, np.ndarray]:
+    proxed = _copy_params(trial)
+    proxed["C"] = prox_C(trial["C"], step, hyper.mu)
+    proxed["D"] = prox_D(trial["D"])
+    proxed["u"] = prox_u(trial["u"], step, hyper.eta)
+    proxed["b"] = np.array(float(np.asarray(trial["b"])), dtype=np.float64)
+    return proxed
+
+
+def fit_joint_pg(
+    X: np.ndarray,
+    y: np.ndarray,
+    hyper,
+    init_params: Dict[str, np.ndarray],
+) -> Dict:
+    params = _copy_params(init_params)
+    history = {
+        "objective": [],
+        "smooth": [],
+        "nonsmooth": [],
+        "reconstruction": [],
+        "classifier_reg": [],
+        "quadratic_penalty": [],
+        "hinge_term": [],
+        "l1_term": [],
+        "step_size": [],
+    }
+    status = "max_iter_reached"
+
+    for iteration in range(hyper.max_iter):
+        current_obj = objective(params, X, y, hyper)
+        grads = gradients(params, X, y, hyper)
+        step = hyper.initial_step
+
+        accepted = False
+        trial_obj = None
+        trial_params = None
+        while step >= hyper.backtracking_min_step:
+            grad_trial = gradient_step(params, grads, step)
+            trial_params = prox_step(grad_trial, step, hyper)
+            trial_obj = objective(trial_params, X, y, hyper)
+            diff = {
+                key: np.asarray(trial_params[key]) - np.asarray(params[key])
+                for key in ("C", "D", "w", "b", "u")
+            }
+            sq_norm = _flatten_diff_sq(params, trial_params)
+            rhs = (
+                current_obj["smooth"]
+                + _flatten_inner_product(grads, diff)
+                + sq_norm / (2.0 * step)
+            )
+            if np.isfinite(trial_obj["total"]) and trial_obj["smooth"] <= rhs:
+                accepted = True
+                break
+            step *= hyper.backtracking_shrink
+
+        if not accepted:
+            status = "backtracking_failed"
+            break
+
+        params = trial_params
+        history["objective"].append(trial_obj["total"])
+        history["smooth"].append(trial_obj["smooth"])
+        history["nonsmooth"].append(trial_obj["nonsmooth"])
+        history["reconstruction"].append(trial_obj["reconstruction"])
+        history["classifier_reg"].append(trial_obj["classifier_reg"])
+        history["quadratic_penalty"].append(trial_obj["quadratic_penalty"])
+        history["hinge_term"].append(trial_obj["hinge_term"])
+        history["l1_term"].append(trial_obj["l1_term"])
+        history["step_size"].append(step)
+
+        if iteration > 0:
+            prev = history["objective"][-2]
+            curr = history["objective"][-1]
+            rel_change = abs(prev - curr) / max(1.0, abs(prev))
+            if rel_change < hyper.tol:
+                status = "converged"
+                break
+
+    return {"params": params, "history": history, "status": status}
+
+
+def _self_check() -> None:
+    class DummyHyper:
+        mu = 0.05
+        rho = 1.0
+        gamma = 0.1
+        eta = 1.0
+        initial_step = 1.0
+        backtracking_shrink = 0.5
+        backtracking_min_step = 1e-8
+        max_iter = 5
+        tol = 1e-12
+
+    rng = np.random.default_rng(0)
+    X = np.clip(rng.normal(size=(5, 12)), 0.0, None)
+    X = X / max(float(X.max()), 1.0)
+    y = np.array([1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1], dtype=np.float64)
+    params = {
+        "D": rng.uniform(0.0, 1.0, size=(5, 4)),
+        "C": np.zeros((4, 12), dtype=np.float64),
+        "w": np.zeros(4, dtype=np.float64),
+        "b": np.array(0.0, dtype=np.float64),
+        "u": np.ones(12, dtype=np.float64),
+    }
+    result = fit_joint_pg(X, y, DummyHyper(), params)
+    print("Status:", result["status"])
+    print("Objective history:", result["history"]["objective"])
+
+
+if __name__ == "__main__":
+    _self_check()
