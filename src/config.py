@@ -4,13 +4,14 @@ from dataclasses import dataclass, asdict
 from typing import Dict, Tuple
 
 
-DEFAULT_LABEL_MAP: Tuple[int, int] = (3, 8)
+DEFAULT_POSITIVE_LABELS: Tuple[int, ...] = (3,)
+DEFAULT_NEGATIVE_LABELS: Tuple[int, ...] = (8,)
 
 
 @dataclass
 class DataConfig:
-    positive_digit: int = 3
-    negative_digit: int = 8
+    positive_labels: Tuple[int, ...] = DEFAULT_POSITIVE_LABELS
+    negative_labels: Tuple[int, ...] = DEFAULT_NEGATIVE_LABELS
     train_size: int = 1000
     val_size: int = 200
     test_size: int = 400

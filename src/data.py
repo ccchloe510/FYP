@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-from typing import Tuple
+from typing import Iterable, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -16,6 +16,7 @@ except ImportError as exc:  # pragma: no cover - informative runtime failure
 
 
 ArrayTuple = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+LabelSpec = Union[int, Sequence[int]]
 DEFAULT_LOCAL_MNIST = Path.home() / ".keras" / "datasets" / "mnist.npz"
 
 
@@ -24,6 +25,38 @@ def _validate_split_sizes(total_requested: int, available: int) -> None:
         raise ValueError(
             f"Requested {total_requested} samples but only {available} are available."
         )
+
+
+def _as_label_tuple(labels: LabelSpec) -> Tuple[int, ...]:
+    if isinstance(labels, (int, np.integer)):
+        return (int(labels),)
+    normalized = tuple(int(label) for label in labels)
+    if not normalized:
+        raise ValueError("label specification cannot be empty")
+    return normalized
+
+
+def _resolve_negative_labels(
+    y_raw: np.ndarray,
+    positive_labels: Tuple[int, ...],
+    negative_labels: Union[None, LabelSpec],
+) -> Tuple[int, ...]:
+    if negative_labels is None:
+        all_labels = {int(label) for label in np.unique(y_raw)}
+        resolved = tuple(sorted(all_labels.difference(set(positive_labels))))
+        if not resolved:
+            raise ValueError("positive_labels already cover all classes; no negative labels remain")
+        return resolved
+    return _as_label_tuple(negative_labels)
+
+
+def _validate_binary_label_sets(
+    positive_labels: Tuple[int, ...],
+    negative_labels: Tuple[int, ...],
+) -> None:
+    overlap = set(positive_labels).intersection(negative_labels)
+    if overlap:
+        raise ValueError(f"positive_labels and negative_labels must be disjoint, got overlap={sorted(overlap)}")
 
 
 def _load_local_mnist_npz(path: Path) -> Tuple[np.ndarray, np.ndarray]:
@@ -58,22 +91,35 @@ def _load_mnist_arrays() -> Tuple[np.ndarray, np.ndarray]:
     return mnist.data.astype(np.float64), mnist.target.astype(np.int64)
 
 
-def load_mnist_3vs8(
-    positive_digit: int = 3,
-    negative_digit: int = 8,
+def load_mnist_binary(
+    positive_labels: LabelSpec = (3,),
+    negative_labels: Union[None, LabelSpec] = (8,),
     train_size: int = 1000,
     val_size: int = 200,
     test_size: int = 400,
     normalize: bool = True,
     random_state: int = 7,
 ) -> ArrayTuple:
-    """Load MNIST and return column-major matrices for the 3-vs-8 task."""
+    """Load MNIST and return column-major matrices for a binary task.
+
+    Examples:
+    - 3 vs 8: positive_labels=3, negative_labels=8
+    - 1 vs 9: positive_labels=[1], negative_labels=[9]
+    - 1 vs rest: positive_labels=1, negative_labels=None
+    - merged classes: positive_labels=[3, 5], negative_labels=[8, 9]
+    """
     X, y_raw = _load_mnist_arrays()
 
-    mask = (y_raw == positive_digit) | (y_raw == negative_digit)
+    positive_labels = _as_label_tuple(positive_labels)
+    negative_labels = _resolve_negative_labels(y_raw, positive_labels, negative_labels)
+    _validate_binary_label_sets(positive_labels, negative_labels)
+
+    positive_mask = np.isin(y_raw, positive_labels)
+    negative_mask = np.isin(y_raw, negative_labels)
+    mask = positive_mask | negative_mask
     X = X[mask]
     y_raw = y_raw[mask]
-    y = np.where(y_raw == positive_digit, 1.0, -1.0)
+    y = np.where(np.isin(y_raw, positive_labels), 1.0, -1.0)
 
     total_requested = train_size + val_size + test_size
     _validate_split_sizes(total_requested, X.shape[0])
@@ -117,10 +163,13 @@ def load_mnist_3vs8(
     )
 
 
+
 def _self_check() -> None:
     print(f"DEFAULT_LOCAL_MNIST exists: {DEFAULT_LOCAL_MNIST.exists()}")
     try:
-        X_train, y_train, X_val, y_val, X_test, y_test = load_mnist_3vs8(
+        X_train, y_train, X_val, y_val, X_test, y_test = load_mnist_binary(
+            positive_labels=3,
+            negative_labels=8,
             train_size=20,
             val_size=10,
             test_size=10,
@@ -135,6 +184,14 @@ def _self_check() -> None:
             y_test.shape,
         )
         print("Value range:", float(X_train.min()), float(X_train.max()))
+        X_train, y_train, _, _, _, _ = load_mnist_binary(
+            positive_labels=1,
+            negative_labels=None,
+            train_size=20,
+            val_size=10,
+            test_size=10,
+        )
+        print("1-vs-rest sample shapes:", X_train.shape, y_train.shape)
     except Exception as exc:
         print(f"Data self-check skipped: {exc}")
 

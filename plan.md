@@ -352,7 +352,7 @@ margin residual.
 
 ## Code Contracts
 
-- `load_mnist_3vs8(...) -> X_train, y_train, X_val, y_val, X_test, y_test`
+- `load_mnist_binary(...) -> X_train, y_train, X_val, y_val, X_test, y_test`
   - `X_*` has shape `(d, n_split)`
   - `y_*` has shape `(n_split,)`
 - `initialize_params(X_train, y_train, m, seed) -> params`

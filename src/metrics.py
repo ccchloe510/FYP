@@ -1,12 +1,17 @@
 """Metrics and simple analysis helpers."""
 
+from copy import deepcopy
 from typing import Dict
 
 import numpy as np
 
 try:
+    from .init import initialize_params
+    from .solver import fit_joint_pg
     from .prox import prox_C
 except ImportError:  # pragma: no cover - enables direct script execution
+    from init import initialize_params
+    from solver import fit_joint_pg
     from prox import prox_C
 
 
@@ -113,6 +118,108 @@ def summarize_joint_result(result: Dict, X: np.ndarray, y: np.ndarray) -> Dict[s
     }
 
 
+def joint_component_scale_report(result: Dict) -> Dict[str, Dict[str, float]]:
+    """Summarize the scale of joint objective components over optimization."""
+    history = result["history"]
+    total = np.asarray(history["objective"], dtype=np.float64)
+    report = {}
+    for key in ("reconstruction", "quadratic_penalty", "hinge_term", "l1_term", "classifier_reg"):
+        values = np.asarray(history[key], dtype=np.float64)
+        if values.size == 0:
+            report[key] = {
+                "initial": float("nan"),
+                "final": float("nan"),
+                "max": float("nan"),
+                "final_fraction_of_total": float("nan"),
+            }
+            continue
+        final_fraction = values[-1] / total[-1] if total.size and total[-1] != 0.0 else float("nan")
+        report[key] = {
+            "initial": float(values[0]),
+            "final": float(values[-1]),
+            "max": float(values.max()),
+            "final_fraction_of_total": float(final_fraction),
+        }
+    return report
+
+
+def format_joint_scale_report(scale_report: Dict[str, Dict[str, float]]) -> str:
+    lines = ["component | initial | final | max | final/total"]
+    for key, stats in scale_report.items():
+        lines.append(
+            f"{key} | {stats['initial']:.6g} | {stats['final']:.6g} | "
+            f"{stats['max']:.6g} | {stats['final_fraction_of_total']:.6g}"
+        )
+    return "\n".join(lines)
+
+
+def run_joint_sensitivity_scan(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    base_hyper,
+    *,
+    rho_values,
+    eta_values,
+    seeds,
+) -> list[Dict[str, float]]:
+    """Run a small validation-based scan over rho/eta to diagnose sensitivity."""
+    rows = []
+    for seed in seeds:
+        for rho in rho_values:
+            for eta in eta_values:
+                hyper = deepcopy(base_hyper)
+                hyper.rho = rho
+                hyper.eta = eta
+                hyper.random_state = seed
+                init_params = initialize_params(
+                    X_train,
+                    y_train,
+                    hyper.dictionary_size,
+                    seed=seed,
+                )
+                result = fit_joint_pg(X_train, y_train, hyper, init_params)
+                train_metrics = summarize_joint_result(result, X_train, y_train)
+                val_metrics = evaluate_joint_model(X_val, y_val, result["params"], hyper)
+                scale_report = joint_component_scale_report(result)
+                rows.append(
+                    {
+                        "seed": float(seed),
+                        "rho": float(rho),
+                        "eta": float(eta),
+                        "train_accuracy": float(train_metrics["accuracy"]),
+                        "val_accuracy": float(val_metrics["accuracy"]),
+                        "train_reconstruction_error": float(train_metrics["reconstruction_error"]),
+                        "val_reconstruction_error": float(val_metrics["reconstruction_error"]),
+                        "final_reconstruction": float(scale_report["reconstruction"]["final"]),
+                        "final_quadratic_penalty": float(scale_report["quadratic_penalty"]["final"]),
+                        "final_hinge_term": float(scale_report["hinge_term"]["final"]),
+                        "final_l1_term": float(scale_report["l1_term"]["final"]),
+                        "status_ok": 1.0 if result["status"] in {"converged", "max_iter_reached"} else 0.0,
+                    }
+                )
+    rows.sort(key=lambda row: (-row["val_accuracy"], row["val_reconstruction_error"]))
+    return rows
+
+
+def summarize_sensitivity_scan(rows: list[Dict[str, float]], top_k: int = 5) -> str:
+    """Format the strongest rho/eta diagnostic results as plain text."""
+    header = (
+        "rank | seed | rho | eta | val_acc | train_acc | "
+        "final_recon | final_hinge | final_quad | status_ok"
+    )
+    lines = [header]
+    for rank, row in enumerate(rows[:top_k], start=1):
+        lines.append(
+            f"{rank} | {int(row['seed'])} | {row['rho']:.6g} | {row['eta']:.6g} | "
+            f"{row['val_accuracy']:.6g} | {row['train_accuracy']:.6g} | "
+            f"{row['final_reconstruction']:.6g} | {row['final_hinge_term']:.6g} | "
+            f"{row['final_quadratic_penalty']:.6g} | {int(row['status_ok'])}"
+        )
+    return "\n".join(lines)
+
+
 def _self_check() -> None:
     C = np.array([[1.0, -1.0, 0.0], [0.5, -0.2, 0.1]])
     w = np.array([0.3, -0.1])
@@ -124,6 +231,18 @@ def _self_check() -> None:
     print("Accuracy:", accuracy_from_codes(C, y, w, b))
     print("Reconstruction error:", reconstruction_error(X, D, C))
     print("Code sparsity:", code_sparsity(C))
+    dummy_result = {
+        "params": {"C": C, "D": D, "w": w, "b": np.array(b), "u": np.zeros(C.shape[1])},
+        "history": {
+            "objective": [10.0, 7.0],
+            "reconstruction": [8.0, 5.0],
+            "quadratic_penalty": [1.0, 0.8],
+            "hinge_term": [0.5, 0.4],
+            "l1_term": [0.4, 0.3],
+            "classifier_reg": [0.1, 0.1],
+        },
+    }
+    print(format_joint_scale_report(joint_component_scale_report(dummy_result)))
 
 
 if __name__ == "__main__":

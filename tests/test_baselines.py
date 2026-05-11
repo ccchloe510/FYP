@@ -3,9 +3,16 @@
 import unittest
 
 import numpy as np
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path.cwd().resolve().parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.baselines import fit_separate_dict_svm, fit_separate_dictionary
 from src.config import HyperParams
+from src.metrics import summarize_sensitivity_scan
 
 
 class BaselineTests(unittest.TestCase):
@@ -38,6 +45,24 @@ class BaselineTests(unittest.TestCase):
         self.assertIn("dictionary_result", result)
         self.assertTrue(np.isfinite(result["metrics"]["train_accuracy"]))
         self.assertTrue(np.isfinite(result["metrics"]["test_accuracy"]))
+
+    def test_sensitivity_summary_formats_rows(self):
+        rows = [
+            {
+                "seed": 7.0,
+                "rho": 10.0,
+                "eta": 50.0,
+                "val_accuracy": 0.94,
+                "train_accuracy": 0.96,
+                "final_reconstruction": 100.0,
+                "final_hinge_term": 8.0,
+                "final_quadratic_penalty": 3.0,
+                "status_ok": 1.0,
+            }
+        ]
+        summary = summarize_sensitivity_scan(rows, top_k=1)
+        self.assertIn("rank | seed | rho | eta", summary)
+        self.assertIn("1 | 7 | 10 | 50", summary)
 
 
 if __name__ == "__main__":
