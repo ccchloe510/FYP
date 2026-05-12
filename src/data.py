@@ -19,6 +19,11 @@ ArrayTuple = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, n
 LabelSpec = Union[int, Sequence[int]]
 DEFAULT_LOCAL_MNIST = Path.home() / ".keras" / "datasets" / "mnist.npz"
 
+try:
+    from .config import TaskConfig
+except ImportError:  # pragma: no cover - enables direct script execution
+    from config import TaskConfig
+
 
 def _validate_split_sizes(total_requested: int, available: int) -> None:
     if total_requested > available:
@@ -163,6 +168,11 @@ def load_mnist_binary(
     )
 
 
+def load_mnist_task(task: TaskConfig) -> ArrayTuple:
+    """Load a task configuration and return train/val/test splits."""
+    return load_mnist_binary(**task.loader_kwargs())
+
+
 
 def _self_check() -> None:
     print(f"DEFAULT_LOCAL_MNIST exists: {DEFAULT_LOCAL_MNIST.exists()}")
@@ -192,6 +202,11 @@ def _self_check() -> None:
             test_size=10,
         )
         print("1-vs-rest sample shapes:", X_train.shape, y_train.shape)
+        from .config import report_task_suite  # pragma: no cover - import path check
+
+        print("Report task suite:")
+        for task in report_task_suite():
+            print(" ", task.name, task.label_description())
     except Exception as exc:
         print(f"Data self-check skipped: {exc}")
 

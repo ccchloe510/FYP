@@ -1,7 +1,7 @@
 """Metrics and simple analysis helpers."""
 
 from copy import deepcopy
-from typing import Dict
+from typing import Dict, List
 
 import numpy as np
 
@@ -31,6 +31,38 @@ def reconstruction_error(X: np.ndarray, D: np.ndarray, C: np.ndarray) -> float:
 
 def code_sparsity(C: np.ndarray, threshold: float = 1e-10) -> float:
     return float(np.mean(np.abs(C) <= threshold))
+
+
+def decision_statistics_from_scores(scores: np.ndarray, y: np.ndarray) -> Dict[str, float]:
+    """Summarize classifier score and margin structure from decision scores."""
+    residual = 1.0 - y * scores
+    violation = np.maximum(0.0, residual)
+    positive_scores = scores[y > 0.0]
+    negative_scores = scores[y < 0.0]
+
+    pos_mean = float(np.mean(positive_scores)) if positive_scores.size else float("nan")
+    neg_mean = float(np.mean(negative_scores)) if negative_scores.size else float("nan")
+    score_gap = pos_mean - neg_mean if np.isfinite(pos_mean) and np.isfinite(neg_mean) else float("nan")
+
+    return {
+        "score_mean": float(np.mean(scores)),
+        "score_std": float(np.std(scores)),
+        "positive_score_mean": pos_mean,
+        "negative_score_mean": neg_mean,
+        "score_gap": float(score_gap),
+        "mean_margin_residual": float(np.mean(residual)),
+        "mean_abs_margin_residual": float(np.mean(np.abs(residual))),
+        "mean_positive_violation": float(np.mean(violation)),
+        "max_positive_violation": float(np.max(violation)),
+        "violation_rate": float(np.mean(residual > 0.0)),
+        "margin_satisfaction_rate": float(np.mean(residual <= 0.0)),
+    }
+
+
+def decision_statistics(C: np.ndarray, y: np.ndarray, w: np.ndarray, b: float) -> Dict[str, float]:
+    """Summarize classifier score and margin structure on a split."""
+    scores = w @ C + float(b)
+    return decision_statistics_from_scores(scores, y)
 
 
 def infer_codes_with_dictionary(
@@ -101,21 +133,35 @@ def evaluate_joint_model(
         max_iter=hyper.max_iter,
         tol=hyper.tol,
     )
-    return {
+    values = {
         "accuracy": accuracy_from_codes(C, y, params["w"], params["b"]),
         "reconstruction_error": reconstruction_error(X, params["D"], C),
         "code_sparsity": code_sparsity(C),
     }
+    values.update(decision_statistics(C, y, params["w"], float(params["b"])))
+    return values
+
+
+def evaluate_joint_model_detailed(
+    X: np.ndarray,
+    y: np.ndarray,
+    params: Dict[str, np.ndarray],
+    hyper,
+) -> Dict[str, float]:
+    """Evaluate a trained joint model and include score/margin diagnostics."""
+    return evaluate_joint_model(X, y, params, hyper)
 
 
 def summarize_joint_result(result: Dict, X: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     params = result["params"]
-    return {
+    values = {
         "accuracy": accuracy_from_codes(params["C"], y, params["w"], params["b"]),
         "reconstruction_error": reconstruction_error(X, params["D"], params["C"]),
         "code_sparsity": code_sparsity(params["C"]),
         "iterations": len(result["history"]["objective"]),
     }
+    values.update(decision_statistics(params["C"], y, params["w"], float(params["b"])))
+    return values
 
 
 def joint_component_scale_report(result: Dict) -> Dict[str, Dict[str, float]]:
@@ -163,7 +209,7 @@ def run_joint_sensitivity_scan(
     rho_values,
     eta_values,
     seeds,
-) -> list[Dict[str, float]]:
+) -> List[Dict[str, float]]:
     """Run a small validation-based scan over rho/eta to diagnose sensitivity."""
     rows = []
     for seed in seeds:
@@ -203,7 +249,7 @@ def run_joint_sensitivity_scan(
     return rows
 
 
-def summarize_sensitivity_scan(rows: list[Dict[str, float]], top_k: int = 5) -> str:
+def summarize_sensitivity_scan(rows: List[Dict[str, float]], top_k: int = 5) -> str:
     """Format the strongest rho/eta diagnostic results as plain text."""
     header = (
         "rank | seed | rho | eta | val_acc | train_acc | "
@@ -220,6 +266,23 @@ def summarize_sensitivity_scan(rows: list[Dict[str, float]], top_k: int = 5) -> 
     return "\n".join(lines)
 
 
+def format_task_comparison_rows(rows: List[Dict[str, float]]) -> str:
+    """Render a compact task comparison table."""
+    header = (
+        "task | method | train_acc | val_acc | test_acc | "
+        "train_recon | val_recon | test_recon | train_sparsity | val_sparsity | test_sparsity"
+    )
+    lines = [header]
+    for row in rows:
+        lines.append(
+            f"{row['task']} | {row['method']} | {row['train_accuracy']:.6g} | {row['val_accuracy']:.6g} | "
+            f"{row['test_accuracy']:.6g} | {row['train_reconstruction_error']:.6g} | "
+            f"{row['val_reconstruction_error']:.6g} | {row['test_reconstruction_error']:.6g} | "
+            f"{row['train_code_sparsity']:.6g} | {row['val_code_sparsity']:.6g} | {row['test_code_sparsity']:.6g}"
+        )
+    return "\n".join(lines)
+
+
 def _self_check() -> None:
     C = np.array([[1.0, -1.0, 0.0], [0.5, -0.2, 0.1]])
     w = np.array([0.3, -0.1])
@@ -231,6 +294,7 @@ def _self_check() -> None:
     print("Accuracy:", accuracy_from_codes(C, y, w, b))
     print("Reconstruction error:", reconstruction_error(X, D, C))
     print("Code sparsity:", code_sparsity(C))
+    print("Decision stats:", decision_statistics(C, y, w, b))
     dummy_result = {
         "params": {"C": C, "D": D, "w": w, "b": np.array(b), "u": np.zeros(C.shape[1])},
         "history": {
