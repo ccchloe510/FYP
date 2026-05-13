@@ -1,8 +1,6 @@
 """Objective and gradient definitions for the joint optimization model.
 
 The auxiliary variable ``u`` is an unconstrained copy of the margin residual.
-It is coupled to the classifier through a quadratic penalty and receives the
-hinge penalty directly.
 """
 
 from typing import Dict
@@ -24,7 +22,6 @@ def smooth_objective(params: Dict[str, np.ndarray], X: np.ndarray, y: np.ndarray
     D, C, w, b, u = params["D"], params["C"], params["w"], float(params["b"]), params["u"]
     E = D @ C - X
     q = penalty_residual_q(C, w, b, u, y)
-
     reconstruction = 0.5 * float(np.sum(E * E))
     classifier_reg = 0.5 * hyper.gamma * float(np.dot(w, w))
     quadratic_penalty = 0.5 * hyper.rho * float(np.dot(q, q))
@@ -63,7 +60,6 @@ def gradients(params: Dict[str, np.ndarray], X: np.ndarray, y: np.ndarray, hyper
     E = D @ C - X
     q = penalty_residual_q(C, w, b, u, y)
     s = q * y
-
     grad_C = D.T @ E + hyper.rho * np.outer(w, s)
     grad_D = E @ C.T
     grad_w = hyper.gamma * w + hyper.rho * (C @ s)

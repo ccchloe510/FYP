@@ -11,8 +11,8 @@ PROJECT_ROOT = Path.cwd().resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.config import one_vs_rest_suite, report_task_suite, task_catalog
-from src.data import load_mnist_task
+from src.config import fashion_task_suite, mnist_task_suite, one_vs_rest_suite, report_task_suite, task_catalog
+from src.data import load_task
 from src.experiments import (
     format_method_aggregate_summary,
     format_task_suite_summary,
@@ -26,10 +26,13 @@ class TaskSuiteTests(unittest.TestCase):
         report_tasks = report_task_suite()
         self.assertEqual(len(report_tasks), 4)
         self.assertIn("3 vs 8", task_catalog())
+        self.assertIn("fashion::T-shirt vs Shirt", task_catalog())
         self.assertEqual(len(one_vs_rest_suite()), 10)
         self.assertEqual(report_tasks[0].label_description(), "3 vs 8")
+        self.assertEqual(mnist_task_suite()[0].dataset, "mnist")
+        self.assertEqual(fashion_task_suite()[0].dataset, "fashion_mnist")
 
-    def test_load_mnist_task_wrapper(self):
+    def test_load_task_wrapper(self):
         task = report_task_suite()[0]
         fake_split = (
             np.zeros((2, 3), dtype=np.float64),
@@ -39,10 +42,11 @@ class TaskSuiteTests(unittest.TestCase):
             np.zeros((2, 1), dtype=np.float64),
             np.array([1.0]),
         )
-        with patch("src.data.load_mnist_binary", return_value=fake_split) as mocked:
-            split = load_mnist_task(task)
+        with patch("src.data.load_binary_task", return_value=fake_split) as mocked:
+            split = load_task(task)
         self.assertEqual(split[0].shape, (2, 3))
         self.assertTrue(mocked.called)
+        self.assertEqual(mocked.call_args.kwargs["dataset"], task.dataset)
         self.assertEqual(mocked.call_args.kwargs["positive_labels"], task.positive_labels)
 
     def test_decision_statistics_from_scores(self):

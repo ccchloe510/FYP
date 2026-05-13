@@ -15,7 +15,7 @@ except ImportError as exc:  # pragma: no cover - informative runtime failure
 try:
     from .baselines import fit_separate_dictionary
     from .config import TaskConfig
-    from .data import load_mnist_task
+    from .data import load_task
     from .init import initialize_params
     from .metrics import (
         code_sparsity,
@@ -30,7 +30,7 @@ try:
 except ImportError:  # pragma: no cover - enables direct script execution
     from baselines import fit_separate_dictionary
     from config import TaskConfig
-    from data import load_mnist_task
+    from data import load_task
     from init import initialize_params
     from metrics import (
         code_sparsity,
@@ -140,7 +140,7 @@ def _row_from_summaries(
 
 def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict[str, object]:
     """Run raw, separate, and joint models on a single MNIST binary task."""
-    X_train, y_train, X_val, y_val, X_test, y_test = load_mnist_task(task)
+    X_train, y_train, X_val, y_val, X_test, y_test = load_task(task)
 
     raw_model = LinearSVC(C=1.0 / max(baseline_hyper.gamma, 1e-8), dual=False, max_iter=5000)
     raw_model.fit(X_train.T, y_train)

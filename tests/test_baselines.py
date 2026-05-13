@@ -10,9 +10,9 @@ PROJECT_ROOT = Path.cwd().resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.baselines import fit_separate_dict_svm, fit_separate_dictionary
+from src.baselines import _encode_with_fixed_dictionary, fit_separate_dict_svm, fit_separate_dictionary
 from src.config import HyperParams
-from src.metrics import summarize_sensitivity_scan
+from src.metrics import infer_codes_with_dictionary, summarize_sensitivity_scan
 
 
 class BaselineTests(unittest.TestCase):
@@ -63,6 +63,34 @@ class BaselineTests(unittest.TestCase):
         summary = summarize_sensitivity_scan(rows, top_k=1)
         self.assertIn("rank | seed | rho | eta", summary)
         self.assertIn("1 | 7 | 10 | 50", summary)
+
+    def test_scaled_code_inference_moves_away_from_zero_codes(self):
+        D = np.eye(2, dtype=np.float64)
+        X = np.array([[1.0], [0.0]], dtype=np.float64)
+
+        joint_codes = infer_codes_with_dictionary(
+            X=X,
+            D=D,
+            mu=0.05,
+            initial_step=1.0,
+            backtracking_shrink=0.5,
+            backtracking_min_step=1e-8,
+            max_iter=10,
+            tol=1e-12,
+        )
+        separate_codes = _encode_with_fixed_dictionary(
+            X=X,
+            D=D,
+            mu=0.05,
+            initial_step=1.0,
+            backtracking_shrink=0.5,
+            backtracking_min_step=1e-8,
+            max_iter=10,
+            tol=1e-12,
+        )
+
+        self.assertGreater(float(np.linalg.norm(joint_codes)), 0.0)
+        self.assertGreater(float(np.linalg.norm(separate_codes)), 0.0)
 
 
 if __name__ == "__main__":

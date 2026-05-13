@@ -18,6 +18,7 @@ except ImportError as exc:  # pragma: no cover - informative runtime failure
 ArrayTuple = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 LabelSpec = Union[int, Sequence[int]]
 DEFAULT_LOCAL_MNIST = Path.home() / ".keras" / "datasets" / "mnist.npz"
+DEFAULT_LOCAL_FASHION_MNIST = Path.home() / ".keras" / "datasets" / "fashion-mnist.npz"
 
 try:
     from .config import TaskConfig
@@ -75,6 +76,17 @@ def _load_local_mnist_npz(path: Path) -> Tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
+def _load_local_fashion_mnist_npz(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    with np.load(path) as data:
+        X_train = data["x_train"].reshape(data["x_train"].shape[0], -1)
+        y_train = data["y_train"]
+        X_test = data["x_test"].reshape(data["x_test"].shape[0], -1)
+        y_test = data["y_test"]
+    X = np.concatenate([X_train, X_test], axis=0).astype(np.float64)
+    y = np.concatenate([y_train, y_test], axis=0).astype(np.int64)
+    return X, y
+
+
 def _load_mnist_arrays() -> Tuple[np.ndarray, np.ndarray]:
     local_path = os.environ.get("MNIST_NPZ_PATH")
     if local_path:
@@ -96,7 +108,53 @@ def _load_mnist_arrays() -> Tuple[np.ndarray, np.ndarray]:
     return mnist.data.astype(np.float64), mnist.target.astype(np.int64)
 
 
-def load_mnist_binary(
+def _load_fashion_mnist_arrays() -> Tuple[np.ndarray, np.ndarray]:
+    local_path = os.environ.get("FASHION_MNIST_NPZ_PATH")
+    if local_path:
+        candidate = Path(local_path).expanduser()
+        if candidate.exists():
+            return _load_local_fashion_mnist_npz(candidate)
+
+    if DEFAULT_LOCAL_FASHION_MNIST.exists():
+        return _load_local_fashion_mnist_npz(DEFAULT_LOCAL_FASHION_MNIST)
+
+    try:
+        from keras.datasets import fashion_mnist as keras_fashion_mnist  # type: ignore
+    except Exception:
+        keras_fashion_mnist = None
+    if keras_fashion_mnist is not None:
+        try:
+            (X_train, y_train), (X_test, y_test) = keras_fashion_mnist.load_data()
+            X = np.concatenate([X_train.reshape(X_train.shape[0], -1), X_test.reshape(X_test.shape[0], -1)], axis=0)
+            y = np.concatenate([y_train, y_test], axis=0)
+            return X.astype(np.float64), y.astype(np.int64)
+        except Exception:
+            pass
+
+    try:
+        fashion = fetch_openml(data_id=40996, as_frame=False, parser="liac-arff")
+    except Exception as exc:  # pragma: no cover - network and local environment dependent
+        raise RuntimeError(
+            "Unable to load Fashion-MNIST. No local fashion-mnist.npz was found, keras download failed, "
+            "and OpenML data_id=40996 download failed. Place a local file at ~/.keras/datasets/fashion-mnist.npz "
+            "or set FASHION_MNIST_NPZ_PATH."
+        ) from exc
+
+    return fashion.data.astype(np.float64), fashion.target.astype(np.int64)
+
+
+def _load_dataset_arrays(dataset: str) -> Tuple[np.ndarray, np.ndarray]:
+    dataset = dataset.lower().strip()
+    if dataset == "mnist":
+        return _load_mnist_arrays()
+    if dataset in {"fashion_mnist", "fashion-mnist", "fmnist"}:
+        return _load_fashion_mnist_arrays()
+    raise ValueError(f"Unsupported dataset '{dataset}'")
+
+
+def load_binary_task(
+    *,
+    dataset: str = "mnist",
     positive_labels: LabelSpec = (3,),
     negative_labels: Union[None, LabelSpec] = (8,),
     train_size: int = 1000,
@@ -105,7 +163,7 @@ def load_mnist_binary(
     normalize: bool = True,
     random_state: int = 7,
 ) -> ArrayTuple:
-    """Load MNIST and return column-major matrices for a binary task.
+    """Load MNIST/Fashion-MNIST and return column-major matrices for a binary task.
 
     Examples:
     - 3 vs 8: positive_labels=3, negative_labels=8
@@ -113,7 +171,7 @@ def load_mnist_binary(
     - 1 vs rest: positive_labels=1, negative_labels=None
     - merged classes: positive_labels=[3, 5], negative_labels=[8, 9]
     """
-    X, y_raw = _load_mnist_arrays()
+    X, y_raw = _load_dataset_arrays(dataset)
 
     positive_labels = _as_label_tuple(positive_labels)
     negative_labels = _resolve_negative_labels(y_raw, positive_labels, negative_labels)
@@ -168,9 +226,36 @@ def load_mnist_binary(
     )
 
 
-def load_mnist_task(task: TaskConfig) -> ArrayTuple:
+def load_mnist_binary(
+    positive_labels: LabelSpec = (3,),
+    negative_labels: Union[None, LabelSpec] = (8,),
+    train_size: int = 1000,
+    val_size: int = 200,
+    test_size: int = 400,
+    normalize: bool = True,
+    random_state: int = 7,
+) -> ArrayTuple:
+    """Backward-compatible MNIST loader for existing notebooks/tests."""
+    return load_binary_task(
+        dataset="mnist",
+        positive_labels=positive_labels,
+        negative_labels=negative_labels,
+        train_size=train_size,
+        val_size=val_size,
+        test_size=test_size,
+        normalize=normalize,
+        random_state=random_state,
+    )
+
+
+def load_task(task: TaskConfig) -> ArrayTuple:
     """Load a task configuration and return train/val/test splits."""
-    return load_mnist_binary(**task.loader_kwargs())
+    return load_binary_task(dataset=task.dataset, **task.loader_kwargs())
+
+
+def load_mnist_task(task: TaskConfig) -> ArrayTuple:
+    """Backward-compatible alias for task loading."""
+    return load_task(task)
 
 
 
@@ -202,10 +287,13 @@ def _self_check() -> None:
             test_size=10,
         )
         print("1-vs-rest sample shapes:", X_train.shape, y_train.shape)
-        from .config import report_task_suite  # pragma: no cover - import path check
+        from .config import fashion_task_suite, report_task_suite  # pragma: no cover - import path check
 
         print("Report task suite:")
         for task in report_task_suite():
+            print(" ", task.name, task.label_description())
+        print("Fashion suite:")
+        for task in fashion_task_suite():
             print(" ", task.name, task.label_description())
     except Exception as exc:
         print(f"Data self-check skipped: {exc}")

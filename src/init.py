@@ -22,8 +22,9 @@ def initialize_params(
     C = np.zeros((m, n), dtype=np.float64)
     w = np.zeros(m, dtype=np.float64)
     b = np.array(0.0, dtype=np.float64)
-    r = 1.0 - y_train * (w @ C + b)
-    u = r.copy()
+    # Start away from q = u - r = 0 so the classification-coupling branch
+    # has a nonzero signal on the first iterations.
+    u = np.zeros(n, dtype=np.float64)
 
     return {"D": D, "C": C, "w": w, "b": b, "u": u}
 

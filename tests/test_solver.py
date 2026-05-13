@@ -67,8 +67,9 @@ class SolverTests(unittest.TestCase):
         self.assertLessEqual(result["history"]["objective"][-1], init_obj)
         self.assertTrue(np.all((result["params"]["D"] >= 0.0) & (result["params"]["D"] <= 1.0)))
         self.assertEqual(result["params"]["u"].shape, (12,))
+        self.assertGreater(float(np.linalg.norm(result["params"]["w"])), 0.0)
 
-    def test_initialize_u_matches_margin_residual(self):
+    def test_initialize_u_starts_at_zero_to_activate_coupling(self):
         X = np.array(
             [
                 [0.1, 0.2, 0.3],
@@ -78,7 +79,7 @@ class SolverTests(unittest.TestCase):
         )
         y = np.array([1.0, -1.0, 1.0], dtype=np.float64)
         init_params = initialize_params(X, y, m=2, seed=0)
-        np.testing.assert_allclose(init_params["u"], np.ones_like(y))
+        np.testing.assert_allclose(init_params["u"], np.zeros_like(y))
 
 
 if __name__ == "__main__":

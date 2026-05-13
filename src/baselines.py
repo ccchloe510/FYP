@@ -169,12 +169,11 @@ def _encode_with_fixed_dictionary(
     tol: float,
 ) -> np.ndarray:
     C = np.zeros((D.shape[1], X.shape[1]), dtype=np.float64)
-    status = "max_iter_reached"
 
     for iteration in range(max_iter):
         residual = D @ C - X
-        grad_C = D.T @ residual
         step = initial_step
+        grad_C = D.T @ residual
 
         current_reconstruction = 0.5 * float(np.sum(residual * residual))
         current_total = current_reconstruction + mu * float(np.sum(np.abs(C)))
@@ -202,7 +201,6 @@ def _encode_with_fixed_dictionary(
         C = trial_C
         rel_change = abs(current_total - trial_total) / max(1.0, abs(current_total))
         if iteration > 0 and rel_change < tol:
-            status = "converged"
             break
 
     return C

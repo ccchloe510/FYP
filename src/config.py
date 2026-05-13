@@ -21,9 +21,10 @@ class DataConfig:
 
 @dataclass(frozen=True)
 class TaskConfig:
-    """Description of a single binary MNIST task used in the experiments."""
+    """Description of a single binary classification task used in the experiments."""
 
     name: str
+    dataset: str = "mnist"
     positive_labels: Tuple[int, ...] = DEFAULT_POSITIVE_LABELS
     negative_labels: Optional[Tuple[int, ...]] = DEFAULT_NEGATIVE_LABELS
     train_size: int = 1000
@@ -81,25 +82,40 @@ def as_dict(config) -> Dict:
 def report_task_suite() -> Tuple[TaskConfig, ...]:
     """Compact binary task suite for the main thesis report."""
     return (
-        TaskConfig(name="3 vs 8", positive_labels=(3,), negative_labels=(8,)),
-        TaskConfig(name="4 vs 9", positive_labels=(4,), negative_labels=(9,)),
-        TaskConfig(name="1 vs 7", positive_labels=(1,), negative_labels=(7,)),
-        TaskConfig(name="5 vs 8", positive_labels=(5,), negative_labels=(8,)),
+        TaskConfig(dataset="mnist", name="3 vs 8", positive_labels=(3,), negative_labels=(8,)),
+        TaskConfig(dataset="mnist", name="4 vs 9", positive_labels=(4,), negative_labels=(9,)),
+        TaskConfig(dataset="mnist", name="1 vs 7", positive_labels=(1,), negative_labels=(7,)),
+        TaskConfig(dataset="mnist", name="5 vs 8", positive_labels=(5,), negative_labels=(8,)),
     )
+
+
+def mnist_task_suite() -> Tuple[TaskConfig, ...]:
+    """Alias for the main MNIST task suite."""
+    return report_task_suite()
 
 
 def extended_task_suite() -> Tuple[TaskConfig, ...]:
     """Larger binary suite for stress-testing the joint formulation."""
     return report_task_suite() + (
-        TaskConfig(name="0 vs 6", positive_labels=(0,), negative_labels=(6,)),
-        TaskConfig(name="2 vs 7", positive_labels=(2,), negative_labels=(7,)),
+        TaskConfig(dataset="mnist", name="0 vs 6", positive_labels=(0,), negative_labels=(6,)),
+        TaskConfig(dataset="mnist", name="2 vs 7", positive_labels=(2,), negative_labels=(7,)),
+    )
+
+
+def fashion_task_suite() -> Tuple[TaskConfig, ...]:
+    """Binary Fashion-MNIST tasks that are harder than the MNIST sanity checks."""
+    return (
+        TaskConfig(dataset="fashion_mnist", name="T-shirt vs Shirt", positive_labels=(0,), negative_labels=(6,)),
+        TaskConfig(dataset="fashion_mnist", name="Pullover vs Coat", positive_labels=(2,), negative_labels=(4,)),
+        TaskConfig(dataset="fashion_mnist", name="Dress vs Coat", positive_labels=(3,), negative_labels=(4,)),
+        TaskConfig(dataset="fashion_mnist", name="Sandal vs Sneaker", positive_labels=(5,), negative_labels=(7,)),
     )
 
 
 def one_vs_rest_suite() -> Tuple[TaskConfig, ...]:
     """One-vs-rest supplement for broader MNIST coverage."""
     return tuple(
-        TaskConfig(name=f"{digit} vs rest", positive_labels=(digit,), negative_labels=None)
+        TaskConfig(dataset="mnist", name=f"{digit} vs rest", positive_labels=(digit,), negative_labels=None)
         for digit in range(10)
     )
 
@@ -109,8 +125,10 @@ def task_catalog() -> Dict[str, TaskConfig]:
     tasks = {}
     for task in extended_task_suite():
         tasks[task.name] = task
+    for task in fashion_task_suite():
+        tasks[f"fashion::{task.name}"] = task
     for task in one_vs_rest_suite():
-        tasks[task.name] = task
+        tasks[f"mnist::{task.name}"] = task
     return tasks
 
 
@@ -120,7 +138,9 @@ def _self_check() -> None:
     print("DataConfig:", as_dict(data_cfg))
     print("HyperParams:", as_dict(hyper))
     for task in report_task_suite():
-        print("Task:", task.name, task.loader_kwargs())
+        print("Task:", task.dataset, task.name, task.loader_kwargs())
+    for task in fashion_task_suite():
+        print("Fashion task:", task.dataset, task.name, task.loader_kwargs())
 
 
 if __name__ == "__main__":
