@@ -67,6 +67,9 @@ class HyperParams:
     max_iter: int = 100
     tol: float = 1e-5
     random_state: int = 7
+    code_correction_every: int = 0
+    code_correction_max_iter: int = 50
+    code_correction_update_u: bool = True
 
 
 def default_data_config() -> DataConfig:

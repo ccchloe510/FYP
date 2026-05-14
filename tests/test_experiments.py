@@ -14,7 +14,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import fashion_task_suite, mnist_task_suite, one_vs_rest_suite, report_task_suite, task_catalog
 from src.data import load_task
 from src.experiments import (
+    fit_svm_on_fixed_dictionary,
     format_method_aggregate_summary,
+    format_dictionary_svm_diagnostic,
     format_task_suite_summary,
     summarize_method_aggregate,
 )
@@ -92,6 +94,37 @@ class TaskSuiteTests(unittest.TestCase):
         text = format_overfitting_diagnostic(summary)
         self.assertIn("metric | value | interpretation", text)
         self.assertIn("diagnosis", text)
+
+    def test_fixed_dictionary_svm_diagnostic(self):
+        D = np.eye(2, dtype=np.float64)
+        X_train = np.array([[1.0, 0.0, 1.0, 0.0], [0.0, 1.0, 0.0, 1.0]])
+        y_train = np.array([1.0, -1.0, 1.0, -1.0])
+        X_val = X_train.copy()
+        y_val = y_train.copy()
+        X_test = X_train.copy()
+        y_test = y_train.copy()
+
+        class DummyHyper:
+            mu = 0.0
+            gamma = 0.1
+            initial_step = 1.0
+            backtracking_shrink = 0.5
+            backtracking_min_step = 1e-8
+            max_iter = 5
+            tol = 1e-8
+
+        diagnostic = fit_svm_on_fixed_dictionary(
+            D, X_train, y_train, X_val, y_val, X_test, y_test, DummyHyper()
+        )
+        self.assertIn("train_summary", diagnostic)
+        self.assertGreaterEqual(diagnostic["test_summary"]["accuracy"], 0.5)
+        text = format_dictionary_svm_diagnostic(
+            diagnostic["train_summary"],
+            diagnostic["val_summary"],
+            diagnostic["test_summary"],
+            diagnostic,
+        )
+        self.assertIn("Joint dictionary + separate SVM", text)
 
     def test_task_suite_summary_formatter(self):
         rows = [

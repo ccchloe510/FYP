@@ -75,11 +75,123 @@ def classification_diagnostics(params: Dict[str, np.ndarray], y: np.ndarray) -> 
     }
 
 
+def _infer_codes_for_monitor(X: np.ndarray, D: np.ndarray, hyper, max_iter: int) -> np.ndarray:
+    """Infer codes with fixed D during training diagnostics."""
+    C = np.zeros((D.shape[1], X.shape[1]), dtype=np.float64)
+    previous_total = None
+
+    for _ in range(max_iter):
+        residual = D @ C - X
+        grad_C = D.T @ residual
+        current_reconstruction = 0.5 * float(np.sum(residual * residual))
+        step = hyper.initial_step
+        accepted = False
+
+        while step >= hyper.backtracking_min_step:
+            trial_C = prox_C(C - step * grad_C, step, hyper.mu)
+            diff = trial_C - C
+            trial_residual = D @ trial_C - X
+            trial_reconstruction = 0.5 * float(np.sum(trial_residual * trial_residual))
+            rhs = (
+                current_reconstruction
+                + float(np.sum(grad_C * diff))
+                + float(np.sum(diff * diff)) / (2.0 * step)
+            )
+            if trial_reconstruction <= rhs:
+                accepted = True
+                break
+            step *= hyper.backtracking_shrink
+
+        if not accepted:
+            break
+
+        trial_total = trial_reconstruction + hyper.mu * float(np.sum(np.abs(trial_C)))
+        C = trial_C
+        if previous_total is not None:
+            rel_change = abs(previous_total - trial_total) / max(1.0, abs(previous_total))
+            if rel_change < hyper.tol:
+                break
+        previous_total = trial_total
+
+    return C
+
+
+def _inferred_code_diagnostics(
+    params: Dict[str, np.ndarray],
+    X: np.ndarray,
+    y: np.ndarray,
+    hyper,
+    max_iter: int,
+) -> Dict[str, float]:
+    """Evaluate current w,b on codes inferred from current D."""
+    C = _infer_codes_for_monitor(X, params["D"], hyper, max_iter)
+    w, b = params["w"], float(params["b"])
+    scores = w @ C + b
+    residual = margin_residual(C, w, b, y)
+    positive_scores = scores[y > 0.0]
+    negative_scores = scores[y < 0.0]
+    pos_mean = float(np.mean(positive_scores)) if positive_scores.size else float("nan")
+    neg_mean = float(np.mean(negative_scores)) if negative_scores.size else float("nan")
+    score_gap = pos_mean - neg_mean if np.isfinite(pos_mean) and np.isfinite(neg_mean) else float("nan")
+    return {
+        "accuracy": float(np.mean(np.where(scores >= 0.0, 1.0, -1.0) == y)),
+        "score_gap": float(score_gap),
+        "violation_rate": float(np.mean(residual > 0.0)),
+        "mean_positive_violation": float(np.mean(np.maximum(0.0, residual))),
+        "code_l2_mean": float(np.mean(np.linalg.norm(C, axis=0))),
+    }
+
+
+def _initialize_monitor_history(history: Dict[str, list], monitor_data) -> None:
+    if not monitor_data:
+        return
+    history["monitor_iteration"] = []
+    for split in monitor_data:
+        for metric in ("accuracy", "score_gap", "violation_rate", "mean_positive_violation", "code_l2_mean"):
+            history[f"monitor_{split}_{metric}"] = []
+
+
+def _append_monitor_history(
+    history: Dict[str, list],
+    params: Dict[str, np.ndarray],
+    hyper,
+    monitor_data,
+    iteration: int,
+    max_iter: int,
+) -> None:
+    if not monitor_data:
+        return
+    history["monitor_iteration"].append(iteration + 1)
+    for split, (X_split, y_split) in monitor_data.items():
+        diagnostics = _inferred_code_diagnostics(params, X_split, y_split, hyper, max_iter)
+        for metric, value in diagnostics.items():
+            history[f"monitor_{split}_{metric}"].append(value)
+
+
+def _apply_code_correction(
+    params: Dict[str, np.ndarray],
+    X: np.ndarray,
+    y: np.ndarray,
+    hyper,
+) -> Dict[str, np.ndarray]:
+    """Replace optimized training C by fixed-D inferred C to reduce deployment mismatch."""
+    corrected = _copy_params(params)
+    max_iter = int(getattr(hyper, "code_correction_max_iter", 50))
+    corrected_C = _infer_codes_for_monitor(X, corrected["D"], hyper, max_iter)
+    corrected["C"] = corrected_C
+    if bool(getattr(hyper, "code_correction_update_u", True)):
+        corrected["u"] = margin_residual(corrected_C, corrected["w"], float(corrected["b"]), y)
+    return corrected
+
+
 def fit_joint_pg(
     X: np.ndarray,
     y: np.ndarray,
     hyper,
     init_params: Dict[str, np.ndarray],
+    monitor_data=None,
+    monitor_every: int = 10,
+    monitor_code_max_iter: int = 50,
 ) -> Dict:
     params = _copy_params(init_params)
     history = {
@@ -98,7 +210,10 @@ def fit_joint_pg(
         "w_norm": [],
         "mean_u_minus_r": [],
         "mean_abs_u_minus_r": [],
+        "code_correction_applied": [],
+        "code_correction_delta_C": [],
     }
+    _initialize_monitor_history(history, monitor_data)
     status = "max_iter_reached"
 
     for iteration in range(hyper.max_iter):
@@ -132,6 +247,15 @@ def fit_joint_pg(
             status = "backtracking_failed"
             break
 
+        correction_every = int(getattr(hyper, "code_correction_every", 0))
+        should_correct = correction_every > 0 and (iteration + 1) % correction_every == 0
+        correction_delta_C = 0.0
+        if should_correct:
+            corrected_params = _apply_code_correction(trial_params, X, y, hyper)
+            correction_delta_C = float(np.linalg.norm(corrected_params["C"] - trial_params["C"]))
+            trial_params = corrected_params
+            trial_obj = objective(trial_params, X, y, hyper)
+
         params = trial_params
         history["objective"].append(trial_obj["total"])
         history["smooth"].append(trial_obj["smooth"])
@@ -142,9 +266,20 @@ def fit_joint_pg(
         history["hinge_term"].append(trial_obj["hinge_term"])
         history["l1_term"].append(trial_obj["l1_term"])
         history["step_size"].append(step)
+        history["code_correction_applied"].append(float(should_correct))
+        history["code_correction_delta_C"].append(correction_delta_C)
         diagnostics = classification_diagnostics(params, y)
         for key, value in diagnostics.items():
             history[key].append(value)
+        if monitor_data and ((iteration + 1) == 1 or (iteration + 1) % monitor_every == 0):
+            _append_monitor_history(
+                history,
+                params,
+                hyper,
+                monitor_data,
+                iteration,
+                monitor_code_max_iter,
+            )
 
         if iteration > 0:
             prev = history["objective"][-2]

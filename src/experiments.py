@@ -69,6 +69,103 @@ def _code_split_summary(
     }
 
 
+def fit_svm_on_fixed_dictionary(
+    D: np.ndarray,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    hyper,
+) -> Dict[str, object]:
+    """Train a diagnostic SVM on codes inferred from a fixed dictionary."""
+    C_train = infer_codes_with_dictionary(
+        X_train,
+        D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+    )
+    C_val = infer_codes_with_dictionary(
+        X_val,
+        D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+    )
+    C_test = infer_codes_with_dictionary(
+        X_test,
+        D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+    )
+    model = LinearSVC(C=1.0 / max(hyper.gamma, 1e-8), dual=False, max_iter=5000)
+    model.fit(C_train.T, y_train)
+    return {
+        "model": model,
+        "codes_train": C_train,
+        "codes_val": C_val,
+        "codes_test": C_test,
+        "train_summary": _code_split_summary(model, C_train, X_train, y_train, D=D),
+        "val_summary": _code_split_summary(model, C_val, X_val, y_val, D=D),
+        "test_summary": _code_split_summary(model, C_test, X_test, y_test, D=D),
+    }
+
+
+def joint_dictionary_svm_diagnostic(
+    joint_result: Dict[str, object],
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    hyper,
+) -> Dict[str, object]:
+    """Use the joint dictionary with a separately trained SVM as a diagnostic."""
+    D = joint_result["params"]["D"]
+    return fit_svm_on_fixed_dictionary(D, X_train, y_train, X_val, y_val, X_test, y_test, hyper)
+
+
+def format_dictionary_svm_diagnostic(
+    joint_train: Dict[str, float],
+    joint_val: Dict[str, float],
+    joint_test: Dict[str, float],
+    diagnostic: Dict[str, object],
+) -> str:
+    """Compare the joint classifier against an SVM trained on the joint dictionary."""
+    rows = [
+        ("Joint classifier", joint_train, joint_val, joint_test),
+        (
+            "Joint dictionary + separate SVM",
+            diagnostic["train_summary"],
+            diagnostic["val_summary"],
+            diagnostic["test_summary"],
+        ),
+    ]
+    lines = [
+        "method | train_acc | val_acc | test_acc | val_gap | test_gap | val_violation | test_violation"
+    ]
+    for method, train, val, test in rows:
+        lines.append(
+            f"{method} | {train['accuracy']:.6g} | {val['accuracy']:.6g} | {test['accuracy']:.6g} | "
+            f"{val['score_gap']:.6g} | {test['score_gap']:.6g} | "
+            f"{val['violation_rate']:.6g} | {test['violation_rate']:.6g}"
+        )
+    return "\n".join(lines)
+
+
 def _nan_metrics() -> Dict[str, float]:
     nan = float("nan")
     return {

@@ -392,16 +392,66 @@ def format_training_diagnostic_trajectory(result: Dict, points=None) -> str:
 
     header = (
         "iteration | objective | score_gap | violation_rate | mean_pos_violation | "
-        "w_norm | mean_u_minus_r | mean_abs_u_minus_r"
+        "w_norm | mean_u_minus_r | mean_abs_u_minus_r | corrected | correction_delta_C"
     )
     lines = [header]
     for idx in points:
+        corrected = history.get("code_correction_applied", [0.0] * n_iters)[idx]
+        correction_delta = history.get("code_correction_delta_C", [0.0] * n_iters)[idx]
         lines.append(
             f"{idx + 1} | {history['objective'][idx]:.6g} | "
             f"{history['train_score_gap'][idx]:.6g} | {history['train_violation_rate'][idx]:.6g} | "
             f"{history['train_mean_positive_violation'][idx]:.6g} | {history['w_norm'][idx]:.6g} | "
-            f"{history['mean_u_minus_r'][idx]:.6g} | {history['mean_abs_u_minus_r'][idx]:.6g}"
+            f"{history['mean_u_minus_r'][idx]:.6g} | {history['mean_abs_u_minus_r'][idx]:.6g} | "
+            f"{corrected:.6g} | {correction_delta:.6g}"
         )
+    return "\n".join(lines)
+
+
+def format_inferred_monitor_trajectory(result: Dict, splits=None) -> str:
+    """Render fixed-D inferred-code diagnostics collected during joint training."""
+    history = result["history"]
+    iterations = history.get("monitor_iteration", [])
+    if not iterations:
+        return (
+            "No inferred-code monitor history found. Run fit_joint_pg with "
+            "monitor_data={'val': (X_val, y_val)} or similar."
+        )
+
+    if splits is None:
+        splits = sorted(
+            key.replace("monitor_", "").replace("_accuracy", "")
+            for key in history
+            if key.startswith("monitor_") and key.endswith("_accuracy")
+        )
+
+    header_parts = ["iteration"]
+    for split in splits:
+        header_parts.extend(
+            [
+                f"{split}_acc",
+                f"{split}_gap",
+                f"{split}_viol",
+                f"{split}_pos_viol",
+                f"{split}_code_l2",
+            ]
+        )
+    lines = [" | ".join(header_parts)]
+
+    for row_idx, iteration in enumerate(iterations):
+        values = [str(iteration)]
+        for split in splits:
+            values.extend(
+                [
+                    f"{history[f'monitor_{split}_accuracy'][row_idx]:.6g}",
+                    f"{history[f'monitor_{split}_score_gap'][row_idx]:.6g}",
+                    f"{history[f'monitor_{split}_violation_rate'][row_idx]:.6g}",
+                    f"{history[f'monitor_{split}_mean_positive_violation'][row_idx]:.6g}",
+                    f"{history[f'monitor_{split}_code_l2_mean'][row_idx]:.6g}",
+                ]
+            )
+        lines.append(" | ".join(values))
+
     return "\n".join(lines)
 
 

@@ -97,6 +97,73 @@ class SolverTests(unittest.TestCase):
         self.assertAlmostEqual(diagnostics["mean_abs_u_minus_r"], 0.0)
         self.assertGreater(diagnostics["w_norm"], 0.0)
 
+    def test_joint_solver_records_inferred_code_monitor_metrics(self):
+        rng = np.random.default_rng(1)
+        X = np.clip(rng.normal(size=(5, 12)), 0.0, None)
+        X = X / max(float(X.max()), 1.0)
+        y = np.array([1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1], dtype=np.float64)
+        hyper = HyperParams(dictionary_size=4, max_iter=4, initial_step=1.0, tol=1e-12)
+        init_params = initialize_params(
+            X,
+            y,
+            m=4,
+            seed=1,
+            code_scale=hyper.init_code_scale,
+            classifier_scale=hyper.init_classifier_scale,
+        )
+
+        result = fit_joint_pg(
+            X,
+            y,
+            hyper,
+            init_params,
+            monitor_data={"train_inferred": (X, y)},
+            monitor_every=2,
+            monitor_code_max_iter=3,
+        )
+
+        history = result["history"]
+        self.assertEqual(history["monitor_iteration"], [1, 2, 4])
+        for key in (
+            "monitor_train_inferred_accuracy",
+            "monitor_train_inferred_score_gap",
+            "monitor_train_inferred_violation_rate",
+            "monitor_train_inferred_mean_positive_violation",
+            "monitor_train_inferred_code_l2_mean",
+        ):
+            self.assertEqual(len(history[key]), len(history["monitor_iteration"]))
+            self.assertTrue(np.all(np.isfinite(history[key])))
+
+    def test_joint_solver_can_apply_periodic_code_correction(self):
+        rng = np.random.default_rng(2)
+        X = np.clip(rng.normal(size=(5, 12)), 0.0, None)
+        X = X / max(float(X.max()), 1.0)
+        y = np.array([1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1], dtype=np.float64)
+        hyper = HyperParams(
+            dictionary_size=4,
+            max_iter=4,
+            initial_step=1.0,
+            tol=1e-12,
+            code_correction_every=2,
+            code_correction_max_iter=3,
+        )
+        init_params = initialize_params(
+            X,
+            y,
+            m=4,
+            seed=2,
+            code_scale=hyper.init_code_scale,
+            classifier_scale=hyper.init_classifier_scale,
+        )
+
+        result = fit_joint_pg(X, y, hyper, init_params)
+
+        history = result["history"]
+        self.assertEqual(history["code_correction_applied"], [0.0, 1.0, 0.0, 1.0])
+        self.assertGreater(history["code_correction_delta_C"][1], 0.0)
+        residual = 1.0 - y * (result["params"]["w"] @ result["params"]["C"] + float(result["params"]["b"]))
+        np.testing.assert_allclose(result["params"]["u"], residual)
+
     def test_initialize_uses_small_random_c_and_w_with_zero_u(self):
         X = np.array(
             [
