@@ -259,6 +259,91 @@ def format_code_distribution_report(report: Dict[str, Dict[str, float]]) -> str:
     return "\n".join(lines)
 
 
+def overfitting_diagnostic_summary(
+    result: Dict,
+    train_metrics: Dict[str, float],
+    val_metrics: Dict[str, float],
+    test_metrics: Dict[str, float],
+    code_report: Dict[str, Dict[str, float]],
+) -> Dict[str, float]:
+    """Summarize the main train-to-validation/test overfitting gaps."""
+    history = result["history"]
+    w_norm = float(history["w_norm"][-1]) if history.get("w_norm") else float("nan")
+    train_acc = float(train_metrics["accuracy"])
+    val_acc = float(val_metrics["accuracy"])
+    test_acc = float(test_metrics["accuracy"])
+    train_violation = float(train_metrics["mean_positive_violation"])
+    val_violation = float(val_metrics["mean_positive_violation"])
+    test_violation = float(test_metrics["mean_positive_violation"])
+    train_gap = float(train_metrics["score_gap"])
+    val_gap = float(val_metrics["score_gap"])
+    test_gap = float(test_metrics["score_gap"])
+    train_code_l2 = float(code_report["train"]["code_l2_mean"])
+    val_code_l2 = float(code_report["val"]["code_l2_mean"])
+    test_code_l2 = float(code_report["test"]["code_l2_mean"])
+
+    return {
+        "train_val_accuracy_gap": train_acc - val_acc,
+        "train_test_accuracy_gap": train_acc - test_acc,
+        "val_test_accuracy_gap": val_acc - test_acc,
+        "val_margin_violation_gap": val_violation - train_violation,
+        "test_margin_violation_gap": test_violation - train_violation,
+        "val_score_gap_retention": val_gap / train_gap if train_gap != 0.0 else float("nan"),
+        "test_score_gap_retention": test_gap / train_gap if train_gap != 0.0 else float("nan"),
+        "val_code_l2_ratio": val_code_l2 / train_code_l2 if train_code_l2 != 0.0 else float("nan"),
+        "test_code_l2_ratio": test_code_l2 / train_code_l2 if train_code_l2 != 0.0 else float("nan"),
+        "w_norm": w_norm,
+    }
+
+
+def format_overfitting_diagnostic(summary: Dict[str, float]) -> str:
+    """Render overfitting diagnostics and rule-based interpretation."""
+    lines = [
+        "metric | value | interpretation",
+        (
+            f"train_val_accuracy_gap | {summary['train_val_accuracy_gap']:.6g} | "
+            "large if > 0.05"
+        ),
+        (
+            f"train_test_accuracy_gap | {summary['train_test_accuracy_gap']:.6g} | "
+            "large if > 0.08"
+        ),
+        (
+            f"test_margin_violation_gap | {summary['test_margin_violation_gap']:.6g} | "
+            "large if test margin is much worse than train"
+        ),
+        (
+            f"test_score_gap_retention | {summary['test_score_gap_retention']:.6g} | "
+            "low if < 0.75"
+        ),
+        (
+            f"test_code_l2_ratio | {summary['test_code_l2_ratio']:.6g} | "
+            "far from 1 indicates code scale mismatch"
+        ),
+        (
+            f"w_norm | {summary['w_norm']:.6g} | "
+            "large values suggest classifier capacity/regularization risk"
+        ),
+    ]
+
+    recommendations = []
+    if summary["train_test_accuracy_gap"] > 0.08 and summary["test_margin_violation_gap"] > 0.25:
+        recommendations.append("primary issue: train margin generalizes poorly to test")
+    if summary["test_score_gap_retention"] < 0.75:
+        recommendations.append("try reducing classifier freedom: higher gamma or earlier stopping")
+    if abs(summary["test_code_l2_ratio"] - 1.0) > 0.25:
+        recommendations.append("check code inference mismatch before changing classifier parameters")
+    if summary["w_norm"] > 5.0:
+        recommendations.append("w is large; test stronger classifier regularization or early stopping")
+    if not recommendations:
+        recommendations.append("no single severe overfitting signal; compare across tasks/seeds")
+
+    lines.append("")
+    lines.append("diagnosis")
+    lines.extend(f"- {item}" for item in recommendations)
+    return "\n".join(lines)
+
+
 def joint_component_scale_report(result: Dict) -> Dict[str, Dict[str, float]]:
     """Summarize the scale of joint objective components over optimization."""
     history = result["history"]

@@ -18,7 +18,13 @@ from src.experiments import (
     format_task_suite_summary,
     summarize_method_aggregate,
 )
-from src.metrics import code_distribution_summary, decision_statistics_from_scores, format_code_distribution_report
+from src.metrics import (
+    code_distribution_summary,
+    decision_statistics_from_scores,
+    format_code_distribution_report,
+    format_overfitting_diagnostic,
+    overfitting_diagnostic_summary,
+)
 
 
 class TaskSuiteTests(unittest.TestCase):
@@ -69,6 +75,23 @@ class TaskSuiteTests(unittest.TestCase):
         text = format_code_distribution_report({"train": stats, "val": stats, "test": stats})
         self.assertIn("split | code_l2_mean", text)
         self.assertIn("train |", text)
+
+    def test_overfitting_diagnostic_summary_and_formatter(self):
+        result = {"history": {"w_norm": [0.5, 6.0]}}
+        train = {"accuracy": 1.0, "mean_positive_violation": 0.1, "score_gap": 2.0}
+        val = {"accuracy": 0.9, "mean_positive_violation": 0.3, "score_gap": 1.4}
+        test = {"accuracy": 0.85, "mean_positive_violation": 0.5, "score_gap": 1.2}
+        code_report = {
+            "train": {"code_l2_mean": 1.0},
+            "val": {"code_l2_mean": 1.1},
+            "test": {"code_l2_mean": 1.2},
+        }
+        summary = overfitting_diagnostic_summary(result, train, val, test, code_report)
+        self.assertAlmostEqual(summary["train_test_accuracy_gap"], 0.15)
+        self.assertAlmostEqual(summary["test_score_gap_retention"], 0.6)
+        text = format_overfitting_diagnostic(summary)
+        self.assertIn("metric | value | interpretation", text)
+        self.assertIn("diagnosis", text)
 
     def test_task_suite_summary_formatter(self):
         rows = [
