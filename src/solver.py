@@ -6,10 +6,10 @@ from typing import Dict
 import numpy as np
 
 try:
-    from .model import gradients, objective
+    from .model import gradients, margin_residual, objective, penalty_residual_q
     from .prox import prox_C, prox_D, prox_u
 except ImportError:  # pragma: no cover - enables direct script execution
-    from model import gradients, objective
+    from model import gradients, margin_residual, objective, penalty_residual_q
     from prox import prox_C, prox_D, prox_u
 
 
@@ -54,6 +54,27 @@ def prox_step(trial: Dict[str, np.ndarray], step: float, hyper) -> Dict[str, np.
     return proxed
 
 
+def classification_diagnostics(params: Dict[str, np.ndarray], y: np.ndarray) -> Dict[str, float]:
+    """Track classifier and auxiliary-residual behavior during joint training."""
+    C, w, b, u = params["C"], params["w"], float(params["b"]), params["u"]
+    scores = w @ C + b
+    residual = margin_residual(C, w, b, y)
+    q = penalty_residual_q(C, w, b, u, y)
+    positive_scores = scores[y > 0.0]
+    negative_scores = scores[y < 0.0]
+    pos_mean = float(np.mean(positive_scores)) if positive_scores.size else float("nan")
+    neg_mean = float(np.mean(negative_scores)) if negative_scores.size else float("nan")
+    score_gap = pos_mean - neg_mean if np.isfinite(pos_mean) and np.isfinite(neg_mean) else float("nan")
+    return {
+        "train_score_gap": float(score_gap),
+        "train_violation_rate": float(np.mean(residual > 0.0)),
+        "train_mean_positive_violation": float(np.mean(np.maximum(0.0, residual))),
+        "w_norm": float(np.linalg.norm(w)),
+        "mean_u_minus_r": float(np.mean(q)),
+        "mean_abs_u_minus_r": float(np.mean(np.abs(q))),
+    }
+
+
 def fit_joint_pg(
     X: np.ndarray,
     y: np.ndarray,
@@ -71,6 +92,12 @@ def fit_joint_pg(
         "hinge_term": [],
         "l1_term": [],
         "step_size": [],
+        "train_score_gap": [],
+        "train_violation_rate": [],
+        "train_mean_positive_violation": [],
+        "w_norm": [],
+        "mean_u_minus_r": [],
+        "mean_abs_u_minus_r": [],
     }
     status = "max_iter_reached"
 
@@ -115,6 +142,9 @@ def fit_joint_pg(
         history["hinge_term"].append(trial_obj["hinge_term"])
         history["l1_term"].append(trial_obj["l1_term"])
         history["step_size"].append(step)
+        diagnostics = classification_diagnostics(params, y)
+        for key, value in diagnostics.items():
+            history[key].append(value)
 
         if iteration > 0:
             prev = history["objective"][-2]

@@ -59,6 +59,8 @@ class HyperParams:
     rho: float = 1.0
     gamma: float = 0.1
     eta: float = 1.0
+    init_code_scale: float = 1e-3
+    init_classifier_scale: float = 1e-3
     initial_step: float = 1.0
     backtracking_shrink: float = 0.5
     backtracking_min_step: float = 1e-8

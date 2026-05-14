@@ -18,7 +18,7 @@ try:
     from .data import load_task
     from .init import initialize_params
     from .metrics import (
-        code_sparsity,
+        code_sparsity_summary,
         decision_statistics_from_scores,
         evaluate_joint_model_detailed,
         infer_codes_with_dictionary,
@@ -33,7 +33,7 @@ except ImportError:  # pragma: no cover - enables direct script execution
     from data import load_task
     from init import initialize_params
     from metrics import (
-        code_sparsity,
+        code_sparsity_summary,
         decision_statistics_from_scores,
         evaluate_joint_model_detailed,
         infer_codes_with_dictionary,
@@ -64,7 +64,7 @@ def _code_split_summary(
     return {
         "accuracy": float(model.score(C.T, y)),
         "reconstruction_error": reconstruction_error(X, D, C),
-        "code_sparsity": code_sparsity(C),
+        **code_sparsity_summary(C),
         **decision_statistics_from_scores(scores, y),
     }
 
@@ -101,6 +101,15 @@ def _row_from_summaries(
         "train_code_sparsity": float(train_summary.get("code_sparsity", float("nan"))),
         "val_code_sparsity": float(val_summary.get("code_sparsity", float("nan"))),
         "test_code_sparsity": float(test_summary.get("code_sparsity", float("nan"))),
+        "train_code_sparsity_1em4": float(train_summary.get("code_sparsity_1em4", float("nan"))),
+        "val_code_sparsity_1em4": float(val_summary.get("code_sparsity_1em4", float("nan"))),
+        "test_code_sparsity_1em4": float(test_summary.get("code_sparsity_1em4", float("nan"))),
+        "train_code_sparsity_1em3": float(train_summary.get("code_sparsity_1em3", float("nan"))),
+        "val_code_sparsity_1em3": float(val_summary.get("code_sparsity_1em3", float("nan"))),
+        "test_code_sparsity_1em3": float(test_summary.get("code_sparsity_1em3", float("nan"))),
+        "train_code_sparsity_1em2": float(train_summary.get("code_sparsity_1em2", float("nan"))),
+        "val_code_sparsity_1em2": float(val_summary.get("code_sparsity_1em2", float("nan"))),
+        "test_code_sparsity_1em2": float(test_summary.get("code_sparsity_1em2", float("nan"))),
         "train_score_gap": float(train_summary["score_gap"]),
         "val_score_gap": float(val_summary["score_gap"]),
         "test_score_gap": float(test_summary["score_gap"]),
@@ -196,7 +205,14 @@ def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict
         iterations=float(len(dict_result["history"]["objective"])),
     )
 
-    init_params = initialize_params(X_train, y_train, joint_hyper.dictionary_size, seed=joint_hyper.random_state)
+    init_params = initialize_params(
+        X_train,
+        y_train,
+        joint_hyper.dictionary_size,
+        seed=joint_hyper.random_state,
+        code_scale=joint_hyper.init_code_scale,
+        classifier_scale=joint_hyper.init_classifier_scale,
+    )
     joint_result = fit_joint_pg(X_train, y_train, joint_hyper, init_params)
     joint_train = summarize_joint_result(joint_result, X_train, y_train)
     joint_val = evaluate_joint_model_detailed(X_val, y_val, joint_result["params"], joint_hyper)
@@ -298,6 +314,15 @@ def summarize_method_aggregate(rows: Iterable[Dict[str, float]]) -> List[Dict[st
             "train_code_sparsity",
             "val_code_sparsity",
             "test_code_sparsity",
+            "train_code_sparsity_1em4",
+            "val_code_sparsity_1em4",
+            "test_code_sparsity_1em4",
+            "train_code_sparsity_1em3",
+            "val_code_sparsity_1em3",
+            "test_code_sparsity_1em3",
+            "train_code_sparsity_1em2",
+            "val_code_sparsity_1em2",
+            "test_code_sparsity_1em2",
             "objective_reconstruction_fraction",
             "objective_quadratic_fraction",
             "objective_hinge_fraction",
@@ -321,7 +346,8 @@ def format_method_aggregate_summary(summary_rows: Iterable[Dict[str, float]]) ->
     header = (
         "method | tasks | train_acc_mean | val_acc_mean | test_acc_mean | "
         "test_acc_std | val_gap_mean | val_violation_mean | val_recon_mean | "
-        "val_sparsity_mean | objective_recon_frac | objective_quad_frac | objective_hinge_frac"
+        "val_sparsity_exact | val_sparsity_1e-4 | val_sparsity_1e-3 | val_sparsity_1e-2 | "
+        "objective_recon_frac | objective_quad_frac | objective_hinge_frac"
     )
     lines = [header]
     for row in summary_rows:
@@ -330,7 +356,9 @@ def format_method_aggregate_summary(summary_rows: Iterable[Dict[str, float]]) ->
             f"{row['val_accuracy_mean']:.6g} | {row['test_accuracy_mean']:.6g} | "
             f"{row['test_accuracy_std']:.6g} | {row['val_score_gap_mean']:.6g} | "
             f"{row['val_violation_rate_mean']:.6g} | {row['val_reconstruction_error_mean']:.6g} | "
-            f"{row['val_code_sparsity_mean']:.6g} | {row['objective_reconstruction_fraction_mean']:.6g} | "
+            f"{row['val_code_sparsity_mean']:.6g} | {row['val_code_sparsity_1em4_mean']:.6g} | "
+            f"{row['val_code_sparsity_1em3_mean']:.6g} | {row['val_code_sparsity_1em2_mean']:.6g} | "
+            f"{row['objective_reconstruction_fraction_mean']:.6g} | "
             f"{row['objective_quadratic_fraction_mean']:.6g} | {row['objective_hinge_fraction_mean']:.6g}"
         )
     return "\n".join(lines)

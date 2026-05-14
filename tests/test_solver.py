@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import HyperParams
 from src.init import initialize_params
 from src.model import gradients, objective
-from src.solver import fit_joint_pg
+from src.solver import classification_diagnostics, fit_joint_pg
 
 
 class SolverTests(unittest.TestCase):
@@ -57,7 +57,14 @@ class SolverTests(unittest.TestCase):
         X = X / max(float(X.max()), 1.0)
         y = np.array([1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1], dtype=np.float64)
         hyper = HyperParams(dictionary_size=4, max_iter=10, initial_step=1.0, tol=1e-12)
-        init_params = initialize_params(X, y, m=4, seed=0)
+        init_params = initialize_params(
+            X,
+            y,
+            m=4,
+            seed=0,
+            code_scale=hyper.init_code_scale,
+            classifier_scale=hyper.init_classifier_scale,
+        )
         init_obj = objective(init_params, X, y, hyper)["total"]
 
         result = fit_joint_pg(X, y, hyper, init_params)
@@ -68,8 +75,29 @@ class SolverTests(unittest.TestCase):
         self.assertTrue(np.all((result["params"]["D"] >= 0.0) & (result["params"]["D"] <= 1.0)))
         self.assertEqual(result["params"]["u"].shape, (12,))
         self.assertGreater(float(np.linalg.norm(result["params"]["w"])), 0.0)
+        for key in (
+            "train_score_gap",
+            "train_violation_rate",
+            "train_mean_positive_violation",
+            "w_norm",
+            "mean_u_minus_r",
+            "mean_abs_u_minus_r",
+        ):
+            self.assertEqual(len(result["history"][key]), len(result["history"]["objective"]))
 
-    def test_initialize_u_starts_at_zero_to_activate_coupling(self):
+    def test_classification_diagnostics_reports_auxiliary_residual_gap(self):
+        C = np.array([[1.0, -1.0], [0.5, 0.25]])
+        w = np.array([0.3, -0.2])
+        b = np.array(0.1)
+        y = np.array([1.0, -1.0])
+        residual = 1.0 - y * (w @ C + float(b))
+        params = {"C": C, "D": np.ones((2, 2)), "w": w, "b": b, "u": residual.copy()}
+        diagnostics = classification_diagnostics(params, y)
+        self.assertAlmostEqual(diagnostics["mean_u_minus_r"], 0.0)
+        self.assertAlmostEqual(diagnostics["mean_abs_u_minus_r"], 0.0)
+        self.assertGreater(diagnostics["w_norm"], 0.0)
+
+    def test_initialize_uses_small_random_c_and_w_with_zero_u(self):
         X = np.array(
             [
                 [0.1, 0.2, 0.3],
@@ -80,6 +108,21 @@ class SolverTests(unittest.TestCase):
         y = np.array([1.0, -1.0, 1.0], dtype=np.float64)
         init_params = initialize_params(X, y, m=2, seed=0)
         np.testing.assert_allclose(init_params["u"], np.zeros_like(y))
+        self.assertGreater(float(np.linalg.norm(init_params["C"])), 0.0)
+        self.assertGreater(float(np.linalg.norm(init_params["w"])), 0.0)
+
+    def test_initialize_can_reproduce_zero_c_and_w(self):
+        X = np.array(
+            [
+                [0.1, 0.2, 0.3],
+                [0.4, 0.5, 0.6],
+            ],
+            dtype=np.float64,
+        )
+        y = np.array([1.0, -1.0, 1.0], dtype=np.float64)
+        init_params = initialize_params(X, y, m=2, seed=0, code_scale=0.0, classifier_scale=0.0)
+        np.testing.assert_allclose(init_params["C"], np.zeros((2, 3)))
+        np.testing.assert_allclose(init_params["w"], np.zeros(2))
 
 
 if __name__ == "__main__":

@@ -10,6 +10,8 @@ def initialize_params(
     y_train: np.ndarray,
     m: int,
     seed: int = 7,
+    code_scale: float = 1e-3,
+    classifier_scale: float = 1e-3,
 ) -> Dict[str, np.ndarray]:
     """Initialize D, C, w, b, u using the agreed project defaults."""
     rng = np.random.default_rng(seed)
@@ -19,11 +21,11 @@ def initialize_params(
 
     atom_indices = rng.choice(n, size=m, replace=False)
     D = np.clip(X_train[:, atom_indices].copy(), 0.0, 1.0)
-    C = np.zeros((m, n), dtype=np.float64)
-    w = np.zeros(m, dtype=np.float64)
+    C = rng.normal(loc=0.0, scale=code_scale, size=(m, n)).astype(np.float64)
+    w = rng.normal(loc=0.0, scale=classifier_scale, size=m).astype(np.float64)
     b = np.array(0.0, dtype=np.float64)
-    # Start away from q = u - r = 0 so the classification-coupling branch
-    # has a nonzero signal on the first iterations.
+    # Start away from q = u - r = 0 so the classification-coupling branch has
+    # a nonzero signal without using a separate-model warm start.
     u = np.zeros(n, dtype=np.float64)
 
     return {"D": D, "C": C, "w": w, "b": b, "u": u}

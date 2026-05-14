@@ -33,6 +33,16 @@ def code_sparsity(C: np.ndarray, threshold: float = 1e-10) -> float:
     return float(np.mean(np.abs(C) <= threshold))
 
 
+def code_sparsity_summary(C: np.ndarray) -> Dict[str, float]:
+    """Report exact-zero and practical near-zero sparsity of a code matrix."""
+    return {
+        "code_sparsity": code_sparsity(C, threshold=1e-10),
+        "code_sparsity_1em4": code_sparsity(C, threshold=1e-4),
+        "code_sparsity_1em3": code_sparsity(C, threshold=1e-3),
+        "code_sparsity_1em2": code_sparsity(C, threshold=1e-2),
+    }
+
+
 def decision_statistics_from_scores(scores: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     """Summarize classifier score and margin structure from decision scores."""
     residual = 1.0 - y * scores
@@ -63,6 +73,31 @@ def decision_statistics(C: np.ndarray, y: np.ndarray, w: np.ndarray, b: float) -
     """Summarize classifier score and margin structure on a split."""
     scores = w @ C + float(b)
     return decision_statistics_from_scores(scores, y)
+
+
+def code_distribution_summary(
+    C: np.ndarray,
+    X: np.ndarray,
+    D: np.ndarray,
+    y: np.ndarray,
+    w: np.ndarray,
+    b: float,
+) -> Dict[str, float]:
+    """Summarize code scale, reconstruction residuals, and classifier scores."""
+    code_l2 = np.linalg.norm(C, axis=0)
+    code_l1 = np.sum(np.abs(C), axis=0)
+    residual_l2 = np.linalg.norm(X - D @ C, axis=0)
+    values = {
+        "code_l2_mean": float(np.mean(code_l2)),
+        "code_l2_std": float(np.std(code_l2)),
+        "code_l1_mean": float(np.mean(code_l1)),
+        "code_l1_std": float(np.std(code_l1)),
+        "recon_residual_l2_mean": float(np.mean(residual_l2)),
+        "recon_residual_l2_std": float(np.std(residual_l2)),
+    }
+    values.update(code_sparsity_summary(C))
+    values.update(decision_statistics(C, y, w, b))
+    return values
 
 
 def infer_codes_with_dictionary(
@@ -136,8 +171,8 @@ def evaluate_joint_model(
     values = {
         "accuracy": accuracy_from_codes(C, y, params["w"], params["b"]),
         "reconstruction_error": reconstruction_error(X, params["D"], C),
-        "code_sparsity": code_sparsity(C),
     }
+    values.update(code_sparsity_summary(C))
     values.update(decision_statistics(C, y, params["w"], float(params["b"])))
     return values
 
@@ -157,11 +192,71 @@ def summarize_joint_result(result: Dict, X: np.ndarray, y: np.ndarray) -> Dict[s
     values = {
         "accuracy": accuracy_from_codes(params["C"], y, params["w"], params["b"]),
         "reconstruction_error": reconstruction_error(X, params["D"], params["C"]),
-        "code_sparsity": code_sparsity(params["C"]),
         "iterations": len(result["history"]["objective"]),
     }
+    values.update(code_sparsity_summary(params["C"]))
     values.update(decision_statistics(params["C"], y, params["w"], float(params["b"])))
     return values
+
+
+def joint_code_distribution_report(
+    result: Dict,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    hyper,
+) -> Dict[str, Dict[str, float]]:
+    """Compare optimized train codes with inferred validation/test codes."""
+    params = result["params"]
+    D, w, b = params["D"], params["w"], float(params["b"])
+    C_train = params["C"]
+    C_val = infer_codes_with_dictionary(
+        X=X_val,
+        D=D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+    )
+    C_test = infer_codes_with_dictionary(
+        X=X_test,
+        D=D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+    )
+    return {
+        "train": code_distribution_summary(C_train, X_train, D, y_train, w, b),
+        "val": code_distribution_summary(C_val, X_val, D, y_val, w, b),
+        "test": code_distribution_summary(C_test, X_test, D, y_test, w, b),
+    }
+
+
+def format_code_distribution_report(report: Dict[str, Dict[str, float]]) -> str:
+    """Render the train/validation/test code-distribution mismatch report."""
+    header = (
+        "split | code_l2_mean | code_l2_std | code_l1_mean | recon_residual_l2_mean | "
+        "sparsity_1e-3 | score_std | score_gap | violation_rate | mean_pos_violation"
+    )
+    lines = [header]
+    for split in ("train", "val", "test"):
+        stats = report[split]
+        lines.append(
+            f"{split} | {stats['code_l2_mean']:.6g} | {stats['code_l2_std']:.6g} | "
+            f"{stats['code_l1_mean']:.6g} | {stats['recon_residual_l2_mean']:.6g} | "
+            f"{stats['code_sparsity_1em3']:.6g} | {stats['score_std']:.6g} | "
+            f"{stats['score_gap']:.6g} | {stats['violation_rate']:.6g} | "
+            f"{stats['mean_positive_violation']:.6g}"
+        )
+    return "\n".join(lines)
 
 
 def joint_component_scale_report(result: Dict) -> Dict[str, Dict[str, float]]:
@@ -199,6 +294,32 @@ def format_joint_scale_report(scale_report: Dict[str, Dict[str, float]]) -> str:
     return "\n".join(lines)
 
 
+def format_training_diagnostic_trajectory(result: Dict, points=None) -> str:
+    """Render selected iterations from the joint training diagnostic history."""
+    history = result["history"]
+    n_iters = len(history.get("objective", []))
+    if n_iters == 0:
+        return "iteration | objective | score_gap | violation_rate | mean_pos_violation | w_norm | mean_u_minus_r | mean_abs_u_minus_r"
+
+    if points is None:
+        candidates = [0, 1, 2, 4, 9, n_iters // 2, n_iters - 3, n_iters - 2, n_iters - 1]
+        points = sorted({idx for idx in candidates if 0 <= idx < n_iters})
+
+    header = (
+        "iteration | objective | score_gap | violation_rate | mean_pos_violation | "
+        "w_norm | mean_u_minus_r | mean_abs_u_minus_r"
+    )
+    lines = [header]
+    for idx in points:
+        lines.append(
+            f"{idx + 1} | {history['objective'][idx]:.6g} | "
+            f"{history['train_score_gap'][idx]:.6g} | {history['train_violation_rate'][idx]:.6g} | "
+            f"{history['train_mean_positive_violation'][idx]:.6g} | {history['w_norm'][idx]:.6g} | "
+            f"{history['mean_u_minus_r'][idx]:.6g} | {history['mean_abs_u_minus_r'][idx]:.6g}"
+        )
+    return "\n".join(lines)
+
+
 def run_joint_sensitivity_scan(
     X_train: np.ndarray,
     y_train: np.ndarray,
@@ -224,6 +345,8 @@ def run_joint_sensitivity_scan(
                     y_train,
                     hyper.dictionary_size,
                     seed=seed,
+                    code_scale=hyper.init_code_scale,
+                    classifier_scale=hyper.init_classifier_scale,
                 )
                 result = fit_joint_pg(X_train, y_train, hyper, init_params)
                 train_metrics = summarize_joint_result(result, X_train, y_train)
@@ -270,15 +393,21 @@ def format_task_comparison_rows(rows: List[Dict[str, float]]) -> str:
     """Render a compact task comparison table."""
     header = (
         "task | method | train_acc | val_acc | test_acc | "
-        "train_recon | val_recon | test_recon | train_sparsity | val_sparsity | test_sparsity"
+        "train_recon | val_recon | test_recon | "
+        "val_sparsity_exact | val_sparsity_1e-4 | val_sparsity_1e-3 | val_sparsity_1e-2"
     )
     lines = [header]
     for row in rows:
+        val_sparsity = float(row.get("val_code_sparsity", float("nan")))
+        val_sparsity_1em4 = float(row.get("val_code_sparsity_1em4", float("nan")))
+        val_sparsity_1em3 = float(row.get("val_code_sparsity_1em3", float("nan")))
+        val_sparsity_1em2 = float(row.get("val_code_sparsity_1em2", float("nan")))
         lines.append(
             f"{row['task']} | {row['method']} | {row['train_accuracy']:.6g} | {row['val_accuracy']:.6g} | "
             f"{row['test_accuracy']:.6g} | {row['train_reconstruction_error']:.6g} | "
             f"{row['val_reconstruction_error']:.6g} | {row['test_reconstruction_error']:.6g} | "
-            f"{row['train_code_sparsity']:.6g} | {row['val_code_sparsity']:.6g} | {row['test_code_sparsity']:.6g}"
+            f"{val_sparsity:.6g} | {val_sparsity_1em4:.6g} | "
+            f"{val_sparsity_1em3:.6g} | {val_sparsity_1em2:.6g}"
         )
     return "\n".join(lines)
 
@@ -293,6 +422,7 @@ def _self_check() -> None:
     print("Predictions:", predict_from_codes(C, w, b))
     print("Accuracy:", accuracy_from_codes(C, y, w, b))
     print("Reconstruction error:", reconstruction_error(X, D, C))
+    print("Sparsity:", code_sparsity_summary(C))
     print("Code sparsity:", code_sparsity(C))
     print("Decision stats:", decision_statistics(C, y, w, b))
     dummy_result = {

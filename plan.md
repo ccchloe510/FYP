@@ -19,9 +19,16 @@ The implementation is fixed to the following experimental setting:
 - optimization method: proximal gradient with backtracking
 
 The central research goal is to evaluate whether learning the representation and
-the classifier jointly yields a better discriminative representation than a
-two-stage pipeline in which dictionary learning and classification are trained
-separately.
+the classifier jointly yields a more structured discriminative representation
+than a two-stage pipeline in which dictionary learning and classification are
+trained separately.
+
+The current diagnostics suggest that the reconstruction term can easily dominate
+the optimization if its contribution is not controlled explicitly. Therefore,
+the mathematically preferred formulation is to balance the objective at the
+group level: reconstruction as one group, classification/coupling as another,
+and sparsity as a third, instead of relying only on the raw scale of the
+individual terms.
 
 ## Why The Problem Is Joint
 
@@ -88,26 +95,45 @@ Here:
 - `u` is an auxiliary variable introduced to decouple the hinge penalty from
   the classifier residual
 
-## Original Coupled Objective
+## Group-Level Balancing
 
-Before introducing the auxiliary variable, the intended coupled objective is
+The preferred thesis formulation keeps the same joint structure, but the
+balance should be understood at the group level. The main modeling question is
+not whether each symbol is renamed, but how the reconstruction, classification,
+and sparsity groups are weighted relative to one another.
+
+One convenient way to write this is with explicit group weights:
 
 $$
-\min_{C,D,w,b}
-\frac{1}{2}\|X - DC\|_F^2
-+ \frac{\gamma}{2}\|w\|_2^2
-+ \frac{\eta}{2}\sum_{j=1}^n \max(0,r_j(C,w,b))
-+ \mu\|C\|_1
+\min_{C,D,w,b,u}
+\lambda_{\text{rec}} \cdot \frac{1}{2}\|X - DC\|_F^2
++ \lambda_{\text{cls}} \cdot
+\left(
+\frac{\gamma}{2}\|w\|_2^2
++ \frac{\rho}{2}\sum_{j=1}^n q_j(C,w,b,u)^2
++ \frac{\eta}{2}\sum_{j=1}^n \max(0,u_j)
+\right)
++ \lambda_{\text{sp}} \cdot \mu\|C\|_1
 + \delta_{[0,1]^{d \times m}}(D).
 $$
 
-The terms have the following roles:
+This is not a cosmetic renaming of the original hyperparameters. The point is
+to make the balancing assumption explicit:
 
-- `1/2 ||X - DC||_F^2` is the reconstruction loss for dictionary learning
-- `gamma/2 ||w||_2^2` is the classifier `L2` regularization
-- `eta/2 sum_j max(0,r_j)` is the hinge-style classification penalty
-- `mu ||C||_1` promotes sparse codes
-- `delta_[0,1](D)` enforces the box constraint on the dictionary
+- `lambda_rec` controls the overall reconstruction contribution
+- `lambda_cls` controls the overall classification / coupling contribution
+- `lambda_sp` controls the overall sparsity contribution
+
+The practical interpretation is:
+
+- reconstruction should remain present, but not dominate the total objective
+- classification should have enough weight to shape the representation
+- sparsity should remain strong enough to keep codes compact, but not so strong
+  that classification collapses
+
+In the implementation, the auxiliary-variable formulation is still useful for
+proximal-gradient splitting, but the thesis should describe the balance as a
+group-level modeling choice rather than a coincidence of raw scales.
 
 ## Auxiliary-Variable Reformulation
 
@@ -118,7 +144,7 @@ $$
 q_j(C,w,b,u) = u_j - r_j(C,w,b).
 $$
 
-The implemented optimization problem is
+The split formulation is
 
 $$
 \min_{C,D,w,b,u}
@@ -215,6 +241,13 @@ h(C,D,u)
 $$
 
 There is no nonnegativity constraint on `u`.
+
+When discussing the implementation in the thesis, it is important to note that
+the tuning objective is not "make reconstruction as small as possible". The
+goal is to choose weights such that reconstruction, classification, coupling,
+and sparsity are all active in a controlled way. In practice, the diagnostics
+should be used to verify that reconstruction does not occupy an overwhelming
+fraction of the final objective.
 
 ## Gradients Of The Smooth Part
 
@@ -387,6 +420,9 @@ This baseline is used to evaluate whether the joint coupling of representation
 and classifier improves performance relative to learning the dictionary first
 and classification second.
 
+The baseline is intentionally separate, and no warm-start from the separate
+solution is used for the joint method when evaluating the thesis claim.
+
 ## Experimental Outputs
 
 The joint solver should provide:
@@ -402,10 +438,21 @@ The main evaluation metrics across methods are:
 
 - validation accuracy
 - test accuracy
-- reconstruction error
+- score gap between positive and negative class decision scores
+- margin violation rate
 - code sparsity
+- reconstruction / classification trade-off
+- reconstruction error
 - runtime
 - objective trajectory versus iteration
+
+For a fair comparison across multiple tasks, the report should include:
+
+- representative MNIST binary pairs
+- representative Fashion-MNIST binary pairs
+- multi-seed mean and standard deviation
+- per-method aggregate summaries
+- the joint-only objective component fractions
 
 ## Recommended Thesis Language
 
@@ -415,8 +462,9 @@ model:
 > We consider a joint dictionary-learning and classification objective in which
 > an auxiliary variable is introduced to decouple the hinge penalty from the
 > classifier residual. A quadratic penalty term enforces closeness between the
-> auxiliary variable and the margin residual, while sparsity is imposed on the
-> code matrix and box constraints are imposed on the dictionary.
+> auxiliary variable and the margin residual, while reconstruction, sparsity,
+> and classification are controlled by explicit weights so that no single term
+> dominates the optimization by scale alone.
 
 The following wording should be avoided:
 
@@ -426,4 +474,6 @@ The following wording should be avoided:
 The more accurate statement is:
 
 > the auxiliary formulation is a penalty-based split model that recovers the
-> original coupling more closely as the quadratic penalty parameter increases.
+> original coupling more closely as the quadratic penalty parameter increases,
+> while the explicit weights determine the balance between reconstruction and
+> classification.

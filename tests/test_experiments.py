@@ -18,7 +18,7 @@ from src.experiments import (
     format_task_suite_summary,
     summarize_method_aggregate,
 )
-from src.metrics import decision_statistics_from_scores
+from src.metrics import code_distribution_summary, decision_statistics_from_scores, format_code_distribution_report
 
 
 class TaskSuiteTests(unittest.TestCase):
@@ -56,6 +56,19 @@ class TaskSuiteTests(unittest.TestCase):
         self.assertAlmostEqual(stats["violation_rate"], 0.5)
         self.assertAlmostEqual(stats["score_gap"], 1.5)
         self.assertAlmostEqual(stats["margin_satisfaction_rate"], 0.5)
+
+    def test_code_distribution_summary_and_formatter(self):
+        C = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=np.float64)
+        D = np.eye(2, dtype=np.float64)
+        X = D @ C
+        y = np.array([1.0, -1.0], dtype=np.float64)
+        w = np.array([1.0, -1.0], dtype=np.float64)
+        stats = code_distribution_summary(C, X, D, y, w, 0.0)
+        self.assertAlmostEqual(stats["recon_residual_l2_mean"], 0.0)
+        self.assertAlmostEqual(stats["code_sparsity"], 0.5)
+        text = format_code_distribution_report({"train": stats, "val": stats, "test": stats})
+        self.assertIn("split | code_l2_mean", text)
+        self.assertIn("train |", text)
 
     def test_task_suite_summary_formatter(self):
         rows = [
