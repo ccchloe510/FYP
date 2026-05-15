@@ -109,6 +109,7 @@ def infer_codes_with_dictionary(
     backtracking_min_step: float,
     max_iter: int,
     tol: float,
+    simplex: bool = False,
 ) -> np.ndarray:
     """Infer sparse codes for new samples with a fixed dictionary."""
     C = np.zeros((D.shape[1], X.shape[1]), dtype=np.float64)
@@ -123,7 +124,7 @@ def infer_codes_with_dictionary(
         accepted = False
 
         while step >= backtracking_min_step:
-            trial_C = prox_C(C - step * grad_C, step, mu)
+            trial_C = prox_C(C - step * grad_C, step, mu, simplex=simplex)
             diff = trial_C - C
             trial_residual = D @ trial_C - X
             trial_reconstruction = 0.5 * float(np.sum(trial_residual * trial_residual))
@@ -167,6 +168,7 @@ def evaluate_joint_model(
         backtracking_min_step=hyper.backtracking_min_step,
         max_iter=hyper.max_iter,
         tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
     values = {
         "accuracy": accuracy_from_codes(C, y, params["w"], params["b"]),
@@ -222,6 +224,7 @@ def joint_code_distribution_report(
         backtracking_min_step=hyper.backtracking_min_step,
         max_iter=hyper.max_iter,
         tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
     C_test = infer_codes_with_dictionary(
         X=X_test,
@@ -232,6 +235,7 @@ def joint_code_distribution_report(
         backtracking_min_step=hyper.backtracking_min_step,
         max_iter=hyper.max_iter,
         tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
     return {
         "train": code_distribution_summary(C_train, X_train, D, y_train, w, b),

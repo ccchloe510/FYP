@@ -89,6 +89,7 @@ def fit_svm_on_fixed_dictionary(
         backtracking_min_step=hyper.backtracking_min_step,
         max_iter=hyper.max_iter,
         tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
     C_val = infer_codes_with_dictionary(
         X_val,
@@ -99,6 +100,7 @@ def fit_svm_on_fixed_dictionary(
         backtracking_min_step=hyper.backtracking_min_step,
         max_iter=hyper.max_iter,
         tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
     C_test = infer_codes_with_dictionary(
         X_test,
@@ -109,6 +111,7 @@ def fit_svm_on_fixed_dictionary(
         backtracking_min_step=hyper.backtracking_min_step,
         max_iter=hyper.max_iter,
         tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
     model = LinearSVC(C=1.0 / max(hyper.gamma, 1e-8), dual=False, max_iter=5000)
     model.fit(C_train.T, y_train)
@@ -244,8 +247,74 @@ def _row_from_summaries(
     return row
 
 
+def _fit_separate_dictionary_svm_row(
+    *,
+    task: TaskConfig,
+    method: str,
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_val: np.ndarray,
+    y_val: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    hyper,
+) -> Dict[str, object]:
+    """Train a separate dictionary and SVM, returning full artifacts and a table row."""
+    dict_result = fit_separate_dictionary(X_train, hyper)
+    D = dict_result["params"]["D"]
+    C_train = dict_result["params"]["C"]
+    C_val = infer_codes_with_dictionary(
+        X_val,
+        D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
+    )
+    C_test = infer_codes_with_dictionary(
+        X_test,
+        D,
+        mu=hyper.mu,
+        initial_step=hyper.initial_step,
+        backtracking_shrink=hyper.backtracking_shrink,
+        backtracking_min_step=hyper.backtracking_min_step,
+        max_iter=hyper.max_iter,
+        tol=hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
+    )
+
+    separate_svm = LinearSVC(C=1.0 / max(hyper.gamma, 1e-8), dual=False, max_iter=5000)
+    separate_svm.fit(C_train.T, y_train)
+    separate_train = _code_split_summary(separate_svm, C_train, X_train, y_train, D=D)
+    separate_val = _code_split_summary(separate_svm, C_val, X_val, y_val, D=D)
+    separate_test = _code_split_summary(separate_svm, C_test, X_test, y_test, D=D)
+    separate_row = _row_from_summaries(
+        task=task,
+        method=method,
+        train_summary=separate_train,
+        val_summary=separate_val,
+        test_summary=separate_test,
+        status=dict_result["status"],
+        iterations=float(len(dict_result["history"]["objective"])),
+    )
+    return {
+        "dictionary_result": dict_result,
+        "model": separate_svm,
+        "codes_train": C_train,
+        "codes_val": C_val,
+        "codes_test": C_test,
+        "train_summary": separate_train,
+        "val_summary": separate_val,
+        "test_summary": separate_test,
+        "row": separate_row,
+    }
+
+
 def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict[str, object]:
-    """Run raw, separate, and joint models on a single MNIST binary task."""
+    """Run raw, separate, optional separate prototype, and joint models on one task."""
     X_train, y_train, X_val, y_val, X_test, y_test = load_task(task)
 
     raw_model = LinearSVC(C=1.0 / max(baseline_hyper.gamma, 1e-8), dual=False, max_iter=5000)
@@ -263,44 +332,31 @@ def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict
         iterations=float("nan"),
     )
 
-    dict_result = fit_separate_dictionary(X_train, baseline_hyper)
-    D = dict_result["params"]["D"]
-    C_train = dict_result["params"]["C"]
-    C_val = infer_codes_with_dictionary(
-        X_val,
-        D,
-        mu=baseline_hyper.mu,
-        initial_step=baseline_hyper.initial_step,
-        backtracking_shrink=baseline_hyper.backtracking_shrink,
-        backtracking_min_step=baseline_hyper.backtracking_min_step,
-        max_iter=baseline_hyper.max_iter,
-        tol=baseline_hyper.tol,
-    )
-    C_test = infer_codes_with_dictionary(
-        X_test,
-        D,
-        mu=baseline_hyper.mu,
-        initial_step=baseline_hyper.initial_step,
-        backtracking_shrink=baseline_hyper.backtracking_shrink,
-        backtracking_min_step=baseline_hyper.backtracking_min_step,
-        max_iter=baseline_hyper.max_iter,
-        tol=baseline_hyper.tol,
-    )
-
-    separate_svm = LinearSVC(C=1.0 / max(baseline_hyper.gamma, 1e-8), dual=False, max_iter=5000)
-    separate_svm.fit(C_train.T, y_train)
-    separate_train = _code_split_summary(separate_svm, C_train, X_train, y_train, D=D)
-    separate_val = _code_split_summary(separate_svm, C_val, X_val, y_val, D=D)
-    separate_test = _code_split_summary(separate_svm, C_test, X_test, y_test, D=D)
-    separate_row = _row_from_summaries(
+    separate = _fit_separate_dictionary_svm_row(
         task=task,
         method="Separate Dict + SVM",
-        train_summary=separate_train,
-        val_summary=separate_val,
-        test_summary=separate_test,
-        status=dict_result["status"],
-        iterations=float(len(dict_result["history"]["objective"])),
+        X_train=X_train,
+        y_train=y_train,
+        X_val=X_val,
+        y_val=y_val,
+        X_test=X_test,
+        y_test=y_test,
+        hyper=baseline_hyper,
     )
+
+    separate_prototype = None
+    if getattr(joint_hyper, "code_simplex", False):
+        separate_prototype = _fit_separate_dictionary_svm_row(
+            task=task,
+            method="Separate Prototype + SVM",
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            X_test=X_test,
+            y_test=y_test,
+            hyper=joint_hyper,
+        )
 
     init_params = initialize_params(
         X_train,
@@ -315,9 +371,12 @@ def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict
     joint_val = evaluate_joint_model_detailed(X_val, y_val, joint_result["params"], joint_hyper)
     joint_test = evaluate_joint_model_detailed(X_test, y_test, joint_result["params"], joint_hyper)
     scale_report = joint_component_scale_report(joint_result)
+    joint_method_name = (
+        "Joint Prototype + SVM" if getattr(joint_hyper, "code_simplex", False) else "Joint Dict + SVM"
+    )
     joint_row = _row_from_summaries(
         task=task,
-        method="Joint Dict + SVM",
+        method=joint_method_name,
         train_summary=joint_train,
         val_summary=joint_val,
         test_summary=joint_test,
@@ -330,8 +389,12 @@ def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict
         },
     )
 
-    comparison_rows = [raw_row, separate_row, joint_row]
-    return {
+    comparison_rows = [raw_row, separate["row"]]
+    if separate_prototype is not None:
+        comparison_rows.append(separate_prototype["row"])
+    comparison_rows.append(joint_row)
+
+    result = {
         "task": asdict(task),
         "data_shapes": {
             "train": X_train.shape,
@@ -345,14 +408,14 @@ def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict
             "test_summary": raw_test,
         },
         "separate": {
-            "dictionary_result": dict_result,
-            "model": separate_svm,
-            "codes_train": C_train,
-            "codes_val": C_val,
-            "codes_test": C_test,
-            "train_summary": separate_train,
-            "val_summary": separate_val,
-            "test_summary": separate_test,
+            "dictionary_result": separate["dictionary_result"],
+            "model": separate["model"],
+            "codes_train": separate["codes_train"],
+            "codes_val": separate["codes_val"],
+            "codes_test": separate["codes_test"],
+            "train_summary": separate["train_summary"],
+            "val_summary": separate["val_summary"],
+            "test_summary": separate["test_summary"],
         },
         "joint": {
             "result": joint_result,
@@ -363,6 +426,18 @@ def benchmark_binary_task(task: TaskConfig, baseline_hyper, joint_hyper) -> Dict
         },
         "comparison_rows": comparison_rows,
     }
+    if separate_prototype is not None:
+        result["separate_prototype"] = {
+            "dictionary_result": separate_prototype["dictionary_result"],
+            "model": separate_prototype["model"],
+            "codes_train": separate_prototype["codes_train"],
+            "codes_val": separate_prototype["codes_val"],
+            "codes_test": separate_prototype["codes_test"],
+            "train_summary": separate_prototype["train_summary"],
+            "val_summary": separate_prototype["val_summary"],
+            "test_summary": separate_prototype["test_summary"],
+        }
+    return result
 
 
 def run_task_suite(tasks: Iterable[TaskConfig], baseline_hyper, joint_hyper) -> List[Dict[str, object]]:
@@ -442,7 +517,7 @@ def format_method_aggregate_summary(summary_rows: Iterable[Dict[str, float]]) ->
     """Render method-level aggregates as a compact text table."""
     header = (
         "method | tasks | train_acc_mean | val_acc_mean | test_acc_mean | "
-        "test_acc_std | val_gap_mean | val_violation_mean | val_recon_mean | "
+        "test_acc_std | train_test_gap_mean | val_violation_mean | val_recon_mean | "
         "val_sparsity_exact | val_sparsity_1e-4 | val_sparsity_1e-3 | val_sparsity_1e-2 | "
         "objective_recon_frac | objective_quad_frac | objective_hinge_frac"
     )
@@ -451,7 +526,8 @@ def format_method_aggregate_summary(summary_rows: Iterable[Dict[str, float]]) ->
         lines.append(
             f"{row['method']} | {int(row['tasks'])} | {row['train_accuracy_mean']:.6g} | "
             f"{row['val_accuracy_mean']:.6g} | {row['test_accuracy_mean']:.6g} | "
-            f"{row['test_accuracy_std']:.6g} | {row['val_score_gap_mean']:.6g} | "
+            f"{row['test_accuracy_std']:.6g} | "
+            f"{row['train_accuracy_mean'] - row['test_accuracy_mean']:.6g} | "
             f"{row['val_violation_rate_mean']:.6g} | {row['val_reconstruction_error_mean']:.6g} | "
             f"{row['val_code_sparsity_mean']:.6g} | {row['val_code_sparsity_1em4_mean']:.6g} | "
             f"{row['val_code_sparsity_1em3_mean']:.6g} | {row['val_code_sparsity_1em2_mean']:.6g} | "

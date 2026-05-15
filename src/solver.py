@@ -47,7 +47,7 @@ def gradient_step(params: Dict[str, np.ndarray], grads: Dict[str, np.ndarray], s
 
 def prox_step(trial: Dict[str, np.ndarray], step: float, hyper) -> Dict[str, np.ndarray]:
     proxed = _copy_params(trial)
-    proxed["C"] = prox_C(trial["C"], step, hyper.mu)
+    proxed["C"] = prox_C(trial["C"], step, hyper.mu, simplex=getattr(hyper, "code_simplex", False))
     proxed["D"] = prox_D(trial["D"])
     proxed["w"] = prox_w(trial["w"], step, getattr(hyper, "w_l1", 0.0))
     proxed["u"] = prox_u(trial["u"], step, hyper.eta)
@@ -89,7 +89,7 @@ def _infer_codes_for_monitor(X: np.ndarray, D: np.ndarray, hyper, max_iter: int)
         accepted = False
 
         while step >= hyper.backtracking_min_step:
-            trial_C = prox_C(C - step * grad_C, step, hyper.mu)
+            trial_C = prox_C(C - step * grad_C, step, hyper.mu, simplex=getattr(hyper, "code_simplex", False))
             diff = trial_C - C
             trial_residual = D @ trial_C - X
             trial_reconstruction = 0.5 * float(np.sum(trial_residual * trial_residual))
@@ -301,6 +301,7 @@ def fit_joint_pg(
 def _self_check() -> None:
     class DummyHyper:
         mu = 0.05
+        code_simplex = False
         rho = 1.0
         gamma = 0.1
         w_l1 = 0.0

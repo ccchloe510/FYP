@@ -21,18 +21,24 @@ def _copy_array_dict(params: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
     return {key: value.copy() for key, value in params.items()}
 
 
-def _reconstruction_objective(params: Dict[str, np.ndarray], X: np.ndarray, mu: float) -> Dict[str, float]:
+def _reconstruction_objective(params: Dict[str, np.ndarray], X: np.ndarray, mu: float, simplex: bool = False) -> Dict[str, float]:
     D, C = params["D"], params["C"]
     residual = D @ C - X
     reconstruction = 0.5 * float(np.sum(residual * residual))
-    l1_term = mu * float(np.sum(np.abs(C)))
+    if simplex:
+        C_indicator = 0.0 if np.all(C >= -1e-8) and np.allclose(np.sum(C, axis=0), 1.0, atol=1e-6) else np.inf
+        l1_term = 0.0
+    else:
+        C_indicator = 0.0
+        l1_term = mu * float(np.sum(np.abs(C)))
     D_indicator = 0.0 if np.all((D >= 0.0) & (D <= 1.0)) else np.inf
-    total = reconstruction + l1_term + D_indicator
+    total = reconstruction + l1_term + D_indicator + C_indicator
     return {
         "total": total,
         "reconstruction": reconstruction,
         "l1_term": l1_term,
         "D_indicator": D_indicator,
+        "C_indicator": C_indicator,
     }
 
 
@@ -50,9 +56,10 @@ def _separate_prox_step(
     grads: Dict[str, np.ndarray],
     step: float,
     mu: float,
+    simplex: bool = False,
 ) -> Dict[str, np.ndarray]:
     trial = _copy_array_dict(params)
-    trial["C"] = prox_C(params["C"] - step * grads["C"], step, mu)
+    trial["C"] = prox_C(params["C"] - step * grads["C"], step, mu, simplex=simplex)
     trial["D"] = prox_D(params["D"] - step * grads["D"])
     return trial
 
@@ -110,9 +117,10 @@ def fit_separate_dictionary(
         "step_size": [],
     }
     status = "max_iter_reached"
+    simplex = getattr(hyper, "code_simplex", False)
 
     for iteration in range(hyper.max_iter):
-        current_obj = _reconstruction_objective(params, X_train, hyper.mu)
+        current_obj = _reconstruction_objective(params, X_train, hyper.mu, simplex=simplex)
         grads = _reconstruction_gradients(params, X_train)
         step = hyper.initial_step
 
@@ -120,7 +128,7 @@ def fit_separate_dictionary(
         trial_obj = None
         trial_params = None
         while step >= hyper.backtracking_min_step:
-            trial_params = _separate_prox_step(params, grads, step, hyper.mu)
+            trial_params = _separate_prox_step(params, grads, step, hyper.mu, simplex=simplex)
             diff = {
                 key: np.asarray(trial_params[key]) - np.asarray(params[key])
                 for key in ("C", "D")
@@ -131,7 +139,7 @@ def fit_separate_dictionary(
                 + _flatten_inner_product(grads, diff)
                 + sq_norm / (2.0 * step)
             )
-            trial_obj = _reconstruction_objective(trial_params, X_train, hyper.mu)
+            trial_obj = _reconstruction_objective(trial_params, X_train, hyper.mu, simplex=simplex)
             if np.isfinite(trial_obj["total"]) and trial_obj["reconstruction"] <= rhs:
                 accepted = True
                 break
@@ -167,6 +175,7 @@ def _encode_with_fixed_dictionary(
     backtracking_min_step: float,
     max_iter: int,
     tol: float,
+    simplex: bool = False,
 ) -> np.ndarray:
     C = np.zeros((D.shape[1], X.shape[1]), dtype=np.float64)
 
@@ -180,7 +189,7 @@ def _encode_with_fixed_dictionary(
         accepted = False
 
         while step >= backtracking_min_step:
-            trial_C = prox_C(C - step * grad_C, step, mu)
+            trial_C = prox_C(C - step * grad_C, step, mu, simplex=simplex)
             diff = trial_C - C
             trial_residual = D @ trial_C - X
             trial_reconstruction = 0.5 * float(np.sum(trial_residual * trial_residual))
@@ -225,6 +234,7 @@ def fit_separate_dict_svm(
         hyper.backtracking_min_step,
         hyper.max_iter,
         hyper.tol,
+        simplex=getattr(hyper, "code_simplex", False),
     )
 
     codes_train_rows = C_train.T
@@ -261,6 +271,7 @@ def _self_check() -> None:
         max_iter = 10
         tol = 1e-12
         random_state = 7
+        code_simplex = False
 
     rng = np.random.default_rng(2)
     X_pos = rng.normal(loc=0.8, scale=0.05, size=(6, 10))

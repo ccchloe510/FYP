@@ -27,6 +27,9 @@ class SmokeTests(unittest.TestCase):
             prox_C(np.array([[1.0, -0.5]]), 0.5, 0.1),
             np.array([[0.95, -0.45]]),
         )
+        simplex_codes = prox_C(np.array([[0.8, -0.5], [0.4, 2.0]]), 0.5, 0.1, simplex=True)
+        self.assertTrue(np.all(simplex_codes >= 0.0))
+        np.testing.assert_allclose(np.sum(simplex_codes, axis=0), np.ones(2))
         np.testing.assert_allclose(
             prox_D(np.array([[-1.0, 0.5, 2.0]])),
             np.array([[0.0, 0.5, 1.0]]),

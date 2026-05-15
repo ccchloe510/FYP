@@ -12,8 +12,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import fashion_task_suite, mnist_task_suite, one_vs_rest_suite, report_task_suite, task_catalog
+from src.config import default_hyperparams
 from src.data import load_task
 from src.experiments import (
+    benchmark_binary_task,
     fit_svm_on_fixed_dictionary,
     format_method_aggregate_summary,
     format_dictionary_svm_diagnostic,
@@ -125,6 +127,39 @@ class TaskSuiteTests(unittest.TestCase):
             diagnostic,
         )
         self.assertIn("Joint dictionary + separate SVM", text)
+
+    def test_benchmark_includes_separate_prototype_when_joint_uses_simplex(self):
+        task = report_task_suite()[0]
+        X_train = np.array(
+            [[1.0, 0.9, 0.0, 0.1], [0.0, 0.1, 1.0, 0.9]], dtype=np.float64
+        )
+        y_train = np.array([1.0, 1.0, -1.0, -1.0])
+        fake_split = (
+            X_train,
+            y_train,
+            X_train.copy(),
+            y_train.copy(),
+            X_train.copy(),
+            y_train.copy(),
+        )
+
+        baseline_hyper = default_hyperparams()
+        joint_hyper = default_hyperparams()
+        baseline_hyper.dictionary_size = 2
+        joint_hyper.dictionary_size = 2
+        baseline_hyper.max_iter = 2
+        joint_hyper.max_iter = 2
+        joint_hyper.code_simplex = True
+
+        with patch("src.experiments.load_task", return_value=fake_split):
+            result = benchmark_binary_task(task, baseline_hyper, joint_hyper)
+
+        methods = [row["method"] for row in result["comparison_rows"]]
+        self.assertEqual(
+            methods,
+            ["Raw SVM", "Separate Dict + SVM", "Separate Prototype + SVM", "Joint Prototype + SVM"],
+        )
+        self.assertIn("separate_prototype", result)
 
     def test_task_suite_summary_formatter(self):
         rows = [

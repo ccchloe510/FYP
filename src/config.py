@@ -56,6 +56,7 @@ class TaskConfig:
 class HyperParams:
     dictionary_size: int = 64
     mu: float = 0.05
+    code_simplex: bool = False
     rho: float = 1.0
     gamma: float = 0.1
     w_l1: float = 0.0

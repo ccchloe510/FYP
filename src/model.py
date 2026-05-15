@@ -36,17 +36,23 @@ def smooth_objective(params: Dict[str, np.ndarray], X: np.ndarray, y: np.ndarray
 
 def nonsmooth_objective(params: Dict[str, np.ndarray], hyper) -> Dict[str, float]:
     C, D, u, w = params["C"], params["D"], params["u"], params["w"]
-    l1_term = hyper.mu * float(np.sum(np.abs(C)))
+    if getattr(hyper, "code_simplex", False):
+        C_indicator = 0.0 if np.all(C >= -1e-8) and np.allclose(np.sum(C, axis=0), 1.0, atol=1e-6) else np.inf
+        l1_term = 0.0
+    else:
+        C_indicator = 0.0
+        l1_term = hyper.mu * float(np.sum(np.abs(C)))
     w_l1_term = getattr(hyper, "w_l1", 0.0) * float(np.sum(np.abs(w)))
     hinge_term = 0.5 * hyper.eta * float(np.sum(np.maximum(0.0, u)))
     D_indicator = 0.0 if np.all((D >= 0.0) & (D <= 1.0)) else np.inf
-    nonsmooth = l1_term + w_l1_term + hinge_term + D_indicator
+    nonsmooth = l1_term + w_l1_term + hinge_term + D_indicator + C_indicator
     return {
         "nonsmooth": nonsmooth,
         "l1_term": l1_term,
         "w_l1_term": w_l1_term,
         "hinge_term": hinge_term,
         "D_indicator": D_indicator,
+        "C_indicator": C_indicator,
     }
 
 
@@ -73,6 +79,7 @@ def gradients(params: Dict[str, np.ndarray], X: np.ndarray, y: np.ndarray, hyper
 def _self_check() -> None:
     class DummyHyper:
         mu = 0.1
+        code_simplex = False
         rho = 1.0
         gamma = 0.2
         w_l1 = 0.05

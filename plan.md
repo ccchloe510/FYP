@@ -2,16 +2,16 @@
 
 ## 1. Project Overview
 
-This project studies a joint optimization formulation for sparse dictionary
-learning and SVM-like binary classification.
+This project studies a joint optimization formulation for dictionary-based
+feature learning and SVM-like binary classification.
 
 The main research question is:
 
 > Can a representation and a classifier be learned jointly so that the learned
-> sparse codes become more useful for classification than codes learned by a
-> separate reconstruction-only dictionary learning stage?
+> features are representative of the input, discriminative for classification,
+> and explainable through dictionary/prototype atom usage?
 
-The project compares three methods:
+The project now compares four methods:
 
 1. **Raw SVM**
    A linear SVM trained directly on the input pixels.
@@ -20,9 +20,18 @@ The project compares three methods:
    A two-stage baseline. First, a dictionary is trained using reconstruction
    and sparsity only. Then an SVM is trained on the fixed sparse codes.
 
-3. **Joint Dictionary + SVM**
-   The proposed method. The dictionary, sparse codes, classifier, and auxiliary
-   margin variables are optimized together in one coupled objective.
+3. **Separate Prototype + SVM**
+   A two-stage prototype baseline. First, a dictionary is trained using the
+   same simplex code constraint used by the prototype version of the joint
+   model. Then an SVM is trained on the fixed prototype codes. This isolates
+   the effect of prototype representation from the effect of joint
+   optimization.
+
+4. **Joint Prototype + SVM**
+   The current proposed method. The dictionary, prototype codes, classifier,
+   and auxiliary margin variables are optimized together in one coupled
+   objective. The simplex constraint makes each code an interpretable mixture
+   of learned prototypes.
 
 The current implementation is not only a final model. It is also a diagnostic
 framework for understanding when the joint formulation helps, when it overfits,
@@ -162,7 +171,82 @@ Correct wording:
 > classifier residual. The quadratic penalty enforces `u_j ~= r_j(C,w,b)`, and
 > the hinge penalty `max(0,u_j)` approximates `max(0,r_j(C,w,b))`.
 
-### 2.5 Composite Proximal-Gradient Splitting
+### 2.5 Prototype-Learning Variant
+
+After the initial joint sparse-coding formulation, a prototype-learning variant
+was added to improve interpretability.
+
+The key modeling change is to constrain each code vector to lie on the
+probability simplex:
+
+$$
+c_j \in \Delta_m
+= \left\{
+c \in \mathbb{R}^m:
+c_i \ge 0,\;
+\sum_{i=1}^m c_i = 1
+\right\}.
+$$
+
+Under this constraint, each sample is represented as a convex combination of
+dictionary atoms:
+
+$$
+x_j \approx D c_j
+= \sum_{i=1}^m c_{ij} d_i,
+\qquad
+c_{ij} \ge 0,
+\qquad
+\sum_i c_{ij}=1.
+$$
+
+This makes the dictionary atoms easier to interpret as prototypes:
+
+> A sample can be explained as a weighted mixture of a small number of learned
+> prototype atoms.
+
+The prototype variant replaces the L1 code penalty with a simplex indicator:
+
+$$
+\delta_{\Delta_m^n}(C)
+=
+\begin{cases}
+0, & c_j \in \Delta_m \text{ for all } j,\\
++\infty, & \text{otherwise}.
+\end{cases}
+$$
+
+The resulting objective is
+
+$$
+\min_{C,D,w,b,u}
+\frac{1}{2}\|X - DC\|_F^2
++ \frac{\gamma}{2}\|w\|_2^2
++ \lambda_w\|w\|_1
++ \frac{\rho}{2}\sum_{j=1}^n q_j(C,w,b,u)^2
++ \frac{\eta}{2}\sum_{j=1}^n \max(0,u_j)
++ \delta_{\Delta_m^n}(C)
++ \delta_{[0,1]^{d \times m}}(D).
+$$
+
+Important note:
+
+If `c_j >= 0` and `sum_i c_ij = 1`, then
+
+$$
+\|c_j\|_1 = 1.
+$$
+
+Therefore, the original L1 term `mu ||C||_1` becomes constant under the
+simplex constraint and no longer controls sparsity. In the implementation, the
+prototype option sets the code nonsmooth term to the simplex indicator instead
+of the L1 penalty.
+
+Practical sparsity is still measured using thresholds such as `1e-3` and
+`1e-2`. In a simplex representation, high threshold sparsity means that each
+sample is represented by only a few prototypes with meaningful positive mass.
+
+### 2.6 Composite Proximal-Gradient Splitting
 
 The problem is written as
 
@@ -192,7 +276,7 @@ $$
 
 This splitting gives simple proximal updates for `C`, `D`, and `u`.
 
-### 2.6 Proximal Operators
+### 2.7 Proximal Operators
 
 For `C`, the prox is soft thresholding:
 
@@ -200,6 +284,18 @@ $$
 \operatorname{prox}_{t\mu\|\cdot\|_1}(Z)
 = \operatorname{sign}(Z)\odot\max(|Z|-t\mu,0).
 $$
+
+For the prototype-learning variant, the prox for `C` is instead column-wise
+projection onto the probability simplex:
+
+$$
+\operatorname{prox}_{\delta_{\Delta_m}}(z)
+= \Pi_{\Delta_m}(z),
+\qquad
+\Delta_m = \{c: c_i \ge 0,\; \sum_i c_i = 1\}.
+$$
+
+This enforces `C >= 0` and `sum_i c_ij = 1` for every sample.
 
 For `D`, the prox is projection onto the box constraint:
 
@@ -228,7 +324,7 @@ This is different from projecting `u` to be nonnegative. Negative values are
 kept because negative margin residuals represent samples that satisfy the
 margin.
 
-### 2.7 Backtracking Rule
+### 2.8 Backtracking Rule
 
 The solver uses the composite proximal-gradient upper-bound condition. For a
 trial point `x_trial`, the smooth part must satisfy
@@ -288,8 +384,9 @@ Classes:
 
 - `HyperParams`
   Stores optimization and model hyperparameters:
-  `dictionary_size`, `mu`, `rho`, `gamma`, `eta`, initialization scales,
-  backtracking settings, `max_iter`, `tol`, and `random_state`.
+  `dictionary_size`, `mu`, `code_simplex`, `rho`, `gamma`, `w_l1`, `eta`,
+  initialization scales, backtracking settings, `max_iter`, `tol`, correction
+  settings, and `random_state`.
 
 Functions:
 
@@ -394,8 +491,16 @@ This file contains the proximal operators.
 
 Functions:
 
-- `prox_C(C_tilde, step, mu)`
-  Soft-thresholding for the L1 code penalty.
+- `prox_C(C_tilde, step, mu, simplex=False)`
+  Soft-thresholding for the L1 code penalty in the original sparse-coding
+  model. If `simplex=True`, it projects each column onto the probability
+  simplex for prototype learning.
+
+- `project_columns_to_simplex(Z)`
+  Projects each code column onto `{c >= 0, sum(c) = 1}`.
+
+- `prox_w(w_tilde, step, w_l1)`
+  Soft-thresholding for the optional sparse SVM head.
 
 - `prox_D(D_tilde)`
   Clips dictionary entries to `[0,1]`.
@@ -504,7 +609,7 @@ These report:
 
 - score mean and standard deviation;
 - positive and negative class score means;
-- `score_gap`;
+- `score_gap` as an optional internal diagnostic;
 - margin residual;
 - positive margin violation;
 - `violation_rate`;
@@ -559,8 +664,9 @@ Functions:
   is not part of the main result table.
 
 - `benchmark_binary_task(task, baseline_hyper, joint_hyper)`
-  Runs Raw SVM, Separate Dictionary + SVM, and Joint Dictionary + SVM on one
-  binary task.
+  Runs Raw SVM, Separate Dictionary + SVM, optional Separate Prototype + SVM,
+  and Joint Dictionary + SVM on one binary task. The Separate Prototype + SVM
+  row is included when `joint_hyper.code_simplex=True`.
 
 - `run_task_suite(tasks, baseline_hyper, joint_hyper)`
   Runs a list of binary tasks.
@@ -599,8 +705,8 @@ The notebooks are used for experimentation and presentation.
 
 - `notebooks/07_multi_pair_results.ipynb`
   Current meeting-ready notebook. It runs multiple MNIST and Fashion-MNIST
-  binary pairs and compares Raw SVM, Separate Dictionary + SVM, and Joint
-  Dictionary + SVM using fixed hyperparameters.
+  binary pairs and compares Raw SVM, Separate Dictionary + SVM, Separate
+  Prototype + SVM, and Joint Dictionary + SVM using fixed hyperparameters.
 
 ## 6. Data Flow
 
@@ -613,6 +719,7 @@ TaskConfig
   -> baseline_hyper / joint_hyper
   -> Raw SVM
   -> Separate Dictionary + SVM
+  -> Separate Prototype + SVM when code_simplex=True
   -> Joint Dictionary + SVM
   -> metrics
   -> comparison rows
@@ -640,17 +747,39 @@ X_train
   -> accuracy, margin, reconstruction, sparsity
 ```
 
-### Joint Dictionary + SVM
+### Separate Prototype + SVM
+
+```text
+X_train
+  -> reconstruction-only dictionary learning with c_j >= 0 and 1^T c_j = 1
+  -> D and prototype-mixture C_train
+  -> infer C_val and C_test using fixed D and the same simplex constraint
+  -> LinearSVC on prototype codes
+  -> accuracy, margin, reconstruction, sparsity, prototype interpretability
+```
+
+This baseline is important for control-variable reasoning. If Joint Prototype
+outperforms Separate Dictionary but not Separate Prototype, the improvement is
+mainly due to the prototype representation. If Joint Prototype outperforms
+Separate Prototype, the additional gain is attributable to the joint
+classification-reconstruction coupling.
+
+### Joint Prototype + SVM
 
 ```text
 X_train, y_train
   -> initialize C, D, w, b, u
   -> proximal-gradient updates of all variables
   -> final D, C_train, w, b, u
-  -> infer C_val and C_test using fixed D
+  -> infer C_val and C_test using fixed D and the simplex code constraint
   -> evaluate classifier w,b on inferred codes
-  -> accuracy, margin, reconstruction, sparsity, trajectory diagnostics
+  -> accuracy, margin, reconstruction, sparsity, explainability diagnostics
 ```
+
+The key comparison is `Separate Prototype + SVM` versus
+`Joint Prototype + SVM`. Both use the same prototype/simplex representation,
+so differences between them are evidence for or against the additional value
+of joint classification-reconstruction optimization.
 
 ## 7. Metrics And Interpretation
 
@@ -671,7 +800,7 @@ X_train, y_train
 
 ### Margin Metrics
 
-- `score_gap`
+- `score_gap` optional diagnostic
   Difference between the mean positive-class score and mean negative-class
   score:
 
@@ -679,9 +808,9 @@ X_train, y_train
   score_gap = mean(score | y=+1) - mean(score | y=-1)
   ```
 
-  A larger score gap usually means stronger class separation, but it is not
-  sufficient evidence of a better model. It must be interpreted together with
-  accuracy and violation rate.
+  A larger score gap can indicate stronger class separation, but it is not used
+  as a primary result metric in the current report because it is less stable
+  across methods. It remains available for debugging score distributions.
 
 - `violation_rate`
   Fraction of samples with positive margin residual:
@@ -734,6 +863,42 @@ X_train, y_train
 The practical sparsity thresholds are useful because proximal-gradient codes
 may contain very small nonzero numerical values.
 
+### Metric Groups For The Final Experimental Claims
+
+The final report uses metrics according to three claims.
+
+**Representative features**
+
+- `test_reconstruction_error`: whether the learned dictionary/prototypes can
+  reconstruct the input.
+- `test_code_sparsity_1em3`: whether the representation is compact.
+- top activated atoms/prototypes: whether the representation can be inspected
+  visually.
+
+Representative quality is therefore not defined by sparsity alone. A useful
+representation should reconstruct the sample reasonably well while using a
+compact set of atoms.
+
+**Discriminative features**
+
+- `test_accuracy`: whether predictions are correct.
+- `train_test_gap`: whether the classifier generalizes.
+- `test_violation_rate`: whether samples satisfy the SVM margin.
+- SVM margin projection: visual evidence of boundary and margin behavior.
+
+The main discriminative margin evidence is `violation_rate`, not `score_gap`.
+Lower violation rate means more samples lie outside the unit-margin band on the
+correct side.
+
+**Explainability**
+
+- prototype coefficients: which atoms are used by a sample;
+- top activated atoms: what visual patterns the sample is reconstructed from;
+- atom contribution `w_i c_i`: which atoms push the classifier toward the
+  positive or negative class;
+- margin projection: whether the sample is confidently classified, close to
+  the boundary, or misclassified.
+
 ### Objective Component Metrics
 
 The component scale report tracks:
@@ -756,7 +921,7 @@ The overfitting diagnostic tracks:
 - train-validation accuracy gap;
 - train-test accuracy gap;
 - test margin violation gap;
-- score-gap retention from train to test;
+- optional score-gap retention from train to test;
 - test/train code scale ratio;
 - `w_norm`.
 
@@ -765,7 +930,6 @@ Current joint results show a recurring pattern:
 - training accuracy often reaches 1.0;
 - validation/test accuracy does not improve consistently;
 - test violation rate remains high;
-- score gap drops from train to test;
 - `w_norm` can become large.
 
 This means the classifier branch learns the training set but does not
@@ -781,11 +945,22 @@ The main hyperparameters are:
 
 - `mu`
   L1 sparsity weight for codes. Larger values make codes sparser but may harm
-  reconstruction or classification if too strong.
+  reconstruction or classification if too strong. In the prototype-learning
+  variant with `code_simplex=True`, this term is not active for `C` because
+  each column has fixed L1 norm equal to one.
+
+- `code_simplex`
+  Enables the prototype-learning variant. If true, each code vector is
+  projected onto the probability simplex, enforcing nonnegative coefficients
+  that sum to one.
 
 - `gamma`
   L2 regularization weight on `w`. Larger values reduce classifier freedom and
   can reduce overfitting.
+
+- `w_l1`
+  Optional L1 penalty on the classifier weights. This produces a sparse SVM
+  head and makes the classifier depend on fewer dictionary atoms.
 
 - `rho`
   Quadratic penalty weight enforcing `u ~= r`. Larger values force the
@@ -824,7 +999,9 @@ Current fixed diagnostic configuration used in multi-pair experiments:
 ```python
 dictionary_size = 48
 mu = 0.3
+code_simplex = False
 gamma = 0.5
+w_l1 = 0.0
 rho = 10
 eta = 10
 init_code_scale = 5e-3
@@ -835,6 +1012,14 @@ random_state = 7
 
 This is not claimed to be globally optimal. It is a stable fixed configuration
 for diagnostic comparison.
+
+For prototype-learning experiments, the key switch is:
+
+```python
+code_simplex = True
+```
+
+Then each sample is interpreted as a convex combination of learned prototypes.
 
 ## 9. Experimental Attempts And Improvements
 
@@ -973,20 +1158,129 @@ Effect:
 ### 9.9 Multi-Pair Result Notebook
 
 `notebooks/07_multi_pair_results.ipynb` was created as a meeting-ready
-diagnostic notebook.
+diagnostic and report notebook.
 
-It compares Raw SVM, Separate Dictionary + SVM, and Joint Dictionary + SVM
-across MNIST and Fashion-MNIST pairs using fixed hyperparameters.
+It compares Raw SVM, Separate Dictionary + SVM, Separate Prototype + SVM, and
+Joint Prototype + SVM across MNIST and Fashion-MNIST pairs using fixed
+hyperparameters.
 
-It reports:
+The report structure is:
 
-- task-level comparison table;
-- dataset/method aggregate table;
-- test accuracy plots;
-- train-test gap plots;
-- margin violation plots;
-- reconstruction-vs-accuracy trade-off;
-- sparsity-vs-accuracy trade-off.
+1. **Task-level comparison table**
+   Reports test accuracy, train-test gap, margin violation rate,
+   reconstruction error, and practical code sparsity.
+
+2. **Standalone margin violation table**
+   Compares `test_violation_rate` across all methods on each pair. Lower is
+   better because more samples satisfy the SVM margin. This table supports the
+   discriminative-feature discussion without mixing margin evidence with
+   reconstruction or sparsity.
+
+3. **Standalone sparsity table**
+   Compares `test_code_sparsity_1em3` across dictionary-based methods. Higher
+   is better because more coefficients are practically zero. Raw SVM is
+   excluded because it has no learned code representation.
+
+4. **Dataset/method aggregate table**
+   Summarizes mean test accuracy, train-test gap, violation rate,
+   reconstruction error, and sparsity separately for MNIST and Fashion-MNIST.
+
+5. **Main plots**
+   The main visual results are:
+   - test accuracy by task;
+   - train-test accuracy gap by task;
+   - test margin violation rate by task;
+   - reconstruction-vs-accuracy trade-off;
+   - sparsity-vs-accuracy trade-off.
+
+The Separate Prototype + SVM row was added after the prototype-learning
+extension. Its purpose is to avoid attributing all improvements to joint
+optimization when they may instead come from the nonnegative simplex
+representation itself.
+
+The intended interpretation is:
+
+- `Separate Dict + SVM` tests whether reconstruction-only dictionary learning
+  provides useful features.
+- `Separate Prototype + SVM` tests whether the simplex prototype constraint
+  alone improves compactness and explainability.
+- `Joint Prototype + SVM` tests whether adding classification feedback during
+  representation learning improves discriminative behavior compared with
+  separate prototype learning.
+
+### 9.10 Explainability Visualizations
+
+Explainability tools were added to make the learned representation easier to
+inspect.
+
+The notebook now runs explainability on two representative tasks:
+
+- Fashion-MNIST `T-shirt vs Shirt`, because it is visually harder and more
+  relevant for representation learning;
+- MNIST `3 vs 8`, because digit shapes are easier to interpret visually.
+
+For each selected task, the analysis includes:
+
+- SVM-style margin projection with decision boundary and two margin lines;
+- side-by-side margin views for Raw SVM, Separate Dictionary + SVM, Separate
+  Prototype + SVM, and Joint Prototype + SVM;
+- representative correct, margin-violating, and misclassified examples;
+- original image, reconstruction, and residual image;
+- top activated atoms for a sample;
+- atom-level classifier contribution `w_i c_i`.
+
+Purpose:
+
+- show not only whether a sample is classified correctly, but also why it is
+  close to or far from the classifier boundary;
+- connect representation learning to classification through atom
+  contributions;
+- explain correct and incorrect predictions through the prototypes that are
+  activated and the sign/magnitude of their classifier contributions.
+
+### 9.11 Sparse SVM Head
+
+A sparse classifier head was added through an optional L1 penalty on `w`:
+
+$$
+\lambda_w\|w\|_1.
+$$
+
+This is implemented by soft-thresholding `w` in the proximal step.
+
+Purpose:
+
+- reduce classifier overfitting;
+- make the classifier depend on fewer dictionary atoms;
+- improve interpretability by identifying discriminative atoms.
+
+Initial experiments showed that a small or moderate `w_l1` can slightly reduce
+classifier density, but it did not by itself solve the generalization issue.
+
+### 9.12 Prototype-Learning Variant
+
+The prototype-learning variant was added after feedback that the representation
+should be more explainable.
+
+Implementation:
+
+- set `code_simplex=True`;
+- replace the code L1 prox with column-wise simplex projection;
+- enforce `C >= 0` and `sum_i c_ij = 1`;
+- keep `D` constrained to `[0,1]`.
+
+Interpretation:
+
+> Each input is represented as a convex combination of learned dictionary
+> prototypes.
+
+Initial quick check on Fashion-MNIST `T-shirt vs Shirt` confirmed:
+
+- training and test codes satisfy nonnegativity and column-sum-one constraints;
+- practical code sparsity under thresholds such as `1e-3` and `1e-2` becomes
+  much higher;
+- test accuracy remains in the same broad range but should be evaluated more
+  systematically across pairs.
 
 ## 10. Current Empirical Findings
 
@@ -1120,4 +1414,3 @@ Recommended direction:
    > competitive on selected harder tasks, but under the current implementation
    > and fixed hyperparameter setting it does not uniformly dominate separate
    > dictionary learning. The main limitation is generalization.
-
