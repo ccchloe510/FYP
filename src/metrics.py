@@ -349,7 +349,7 @@ def joint_component_scale_report(result: Dict) -> Dict[str, Dict[str, float]]:
     history = result["history"]
     total = np.asarray(history["objective"], dtype=np.float64)
     report = {}
-    for key in ("reconstruction", "quadratic_penalty", "hinge_term", "l1_term", "classifier_reg"):
+    for key in ("reconstruction", "quadratic_penalty", "hinge_term", "l1_term", "w_l1_term", "classifier_reg"):
         values = np.asarray(history[key], dtype=np.float64)
         if values.size == 0:
             report[key] = {

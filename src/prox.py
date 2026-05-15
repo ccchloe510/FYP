@@ -7,6 +7,10 @@ def prox_C(C_tilde: np.ndarray, step: float, mu: float) -> np.ndarray:
     return np.sign(C_tilde) * np.maximum(np.abs(C_tilde) - step * mu, 0.0)
 
 
+def prox_w(w_tilde: np.ndarray, step: float, w_l1: float) -> np.ndarray:
+    return np.sign(w_tilde) * np.maximum(np.abs(w_tilde) - step * w_l1, 0.0)
+
+
 def prox_D(D_tilde: np.ndarray) -> np.ndarray:
     return np.clip(D_tilde, 0.0, 1.0)
 
@@ -22,6 +26,7 @@ def prox_u(u_tilde: np.ndarray, step: float, eta: float) -> np.ndarray:
 
 def _self_check() -> None:
     print("prox_C:", prox_C(np.array([[1.0, -0.5]]), 0.5, 0.1))
+    print("prox_w:", prox_w(np.array([1.0, -0.5]), 0.5, 0.1))
     print("prox_D:", prox_D(np.array([[-1.0, 0.5, 2.0]])))
     print("prox_u:", prox_u(np.array([-1.0, 0.05, 0.5, 2.0]), 0.4, 0.5))
 

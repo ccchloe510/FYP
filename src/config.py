@@ -58,6 +58,7 @@ class HyperParams:
     mu: float = 0.05
     rho: float = 1.0
     gamma: float = 0.1
+    w_l1: float = 0.0
     eta: float = 1.0
     init_code_scale: float = 1e-3
     init_classifier_scale: float = 1e-3
@@ -69,6 +70,7 @@ class HyperParams:
     random_state: int = 7
     code_correction_every: int = 0
     code_correction_max_iter: int = 50
+    code_correction_blend: float = 1.0
     code_correction_update_u: bool = True
 
 

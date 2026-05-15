@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from src.config import HyperParams
 from src.init import initialize_params
 from src.model import gradients, objective
-from src.solver import classification_diagnostics, fit_joint_pg
+from src.solver import classification_diagnostics, fit_joint_pg, prox_step
 
 
 class SolverTests(unittest.TestCase):
@@ -97,6 +97,20 @@ class SolverTests(unittest.TestCase):
         self.assertAlmostEqual(diagnostics["mean_abs_u_minus_r"], 0.0)
         self.assertGreater(diagnostics["w_norm"], 0.0)
 
+    def test_sparse_w_prox_can_zero_classifier_weights(self):
+        hyper = HyperParams(w_l1=0.5)
+        trial = {
+            "C": np.array([[0.2, -0.2]]),
+            "D": np.array([[0.2], [0.8]]),
+            "w": np.array([0.2, -1.0]),
+            "b": np.array(0.0),
+            "u": np.array([-0.2, 0.2]),
+        }
+
+        proxed = prox_step(trial, step=1.0, hyper=hyper)
+
+        np.testing.assert_allclose(proxed["w"], np.array([0.0, -0.5]))
+
     def test_joint_solver_records_inferred_code_monitor_metrics(self):
         rng = np.random.default_rng(1)
         X = np.clip(rng.normal(size=(5, 12)), 0.0, None)
@@ -146,6 +160,7 @@ class SolverTests(unittest.TestCase):
             tol=1e-12,
             code_correction_every=2,
             code_correction_max_iter=3,
+            code_correction_blend=0.5,
         )
         init_params = initialize_params(
             X,

@@ -7,10 +7,10 @@ import numpy as np
 
 try:
     from .model import gradients, margin_residual, objective, penalty_residual_q
-    from .prox import prox_C, prox_D, prox_u
+    from .prox import prox_C, prox_D, prox_u, prox_w
 except ImportError:  # pragma: no cover - enables direct script execution
     from model import gradients, margin_residual, objective, penalty_residual_q
-    from prox import prox_C, prox_D, prox_u
+    from prox import prox_C, prox_D, prox_u, prox_w
 
 
 def _copy_params(params: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
@@ -49,6 +49,7 @@ def prox_step(trial: Dict[str, np.ndarray], step: float, hyper) -> Dict[str, np.
     proxed = _copy_params(trial)
     proxed["C"] = prox_C(trial["C"], step, hyper.mu)
     proxed["D"] = prox_D(trial["D"])
+    proxed["w"] = prox_w(trial["w"], step, getattr(hyper, "w_l1", 0.0))
     proxed["u"] = prox_u(trial["u"], step, hyper.eta)
     proxed["b"] = np.array(float(np.asarray(trial["b"])), dtype=np.float64)
     return proxed
@@ -174,10 +175,13 @@ def _apply_code_correction(
     y: np.ndarray,
     hyper,
 ) -> Dict[str, np.ndarray]:
-    """Replace optimized training C by fixed-D inferred C to reduce deployment mismatch."""
+    """Move optimized training C toward fixed-D inferred C to reduce deployment mismatch."""
     corrected = _copy_params(params)
     max_iter = int(getattr(hyper, "code_correction_max_iter", 50))
-    corrected_C = _infer_codes_for_monitor(X, corrected["D"], hyper, max_iter)
+    blend = float(getattr(hyper, "code_correction_blend", 1.0))
+    blend = min(1.0, max(0.0, blend))
+    inferred_C = _infer_codes_for_monitor(X, corrected["D"], hyper, max_iter)
+    corrected_C = (1.0 - blend) * corrected["C"] + blend * inferred_C
     corrected["C"] = corrected_C
     if bool(getattr(hyper, "code_correction_update_u", True)):
         corrected["u"] = margin_residual(corrected_C, corrected["w"], float(corrected["b"]), y)
@@ -203,6 +207,7 @@ def fit_joint_pg(
         "quadratic_penalty": [],
         "hinge_term": [],
         "l1_term": [],
+        "w_l1_term": [],
         "step_size": [],
         "train_score_gap": [],
         "train_violation_rate": [],
@@ -265,6 +270,7 @@ def fit_joint_pg(
         history["quadratic_penalty"].append(trial_obj["quadratic_penalty"])
         history["hinge_term"].append(trial_obj["hinge_term"])
         history["l1_term"].append(trial_obj["l1_term"])
+        history["w_l1_term"].append(trial_obj.get("w_l1_term", 0.0))
         history["step_size"].append(step)
         history["code_correction_applied"].append(float(should_correct))
         history["code_correction_delta_C"].append(correction_delta_C)
@@ -297,6 +303,7 @@ def _self_check() -> None:
         mu = 0.05
         rho = 1.0
         gamma = 0.1
+        w_l1 = 0.0
         eta = 1.0
         initial_step = 1.0
         backtracking_shrink = 0.5

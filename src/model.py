@@ -35,14 +35,16 @@ def smooth_objective(params: Dict[str, np.ndarray], X: np.ndarray, y: np.ndarray
 
 
 def nonsmooth_objective(params: Dict[str, np.ndarray], hyper) -> Dict[str, float]:
-    C, D, u = params["C"], params["D"], params["u"]
+    C, D, u, w = params["C"], params["D"], params["u"], params["w"]
     l1_term = hyper.mu * float(np.sum(np.abs(C)))
+    w_l1_term = getattr(hyper, "w_l1", 0.0) * float(np.sum(np.abs(w)))
     hinge_term = 0.5 * hyper.eta * float(np.sum(np.maximum(0.0, u)))
     D_indicator = 0.0 if np.all((D >= 0.0) & (D <= 1.0)) else np.inf
-    nonsmooth = l1_term + hinge_term + D_indicator
+    nonsmooth = l1_term + w_l1_term + hinge_term + D_indicator
     return {
         "nonsmooth": nonsmooth,
         "l1_term": l1_term,
+        "w_l1_term": w_l1_term,
         "hinge_term": hinge_term,
         "D_indicator": D_indicator,
     }
@@ -73,6 +75,7 @@ def _self_check() -> None:
         mu = 0.1
         rho = 1.0
         gamma = 0.2
+        w_l1 = 0.05
         eta = 0.5
 
     X = np.array([[0.1, 0.2], [0.3, 0.4]])
